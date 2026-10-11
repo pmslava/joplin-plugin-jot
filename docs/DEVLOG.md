@@ -11,3 +11,7 @@ Slava's corrections from trying the first build: the notebook field became a com
 Verified at release: 110 harness checks and 23 Playwright cases green in the isolated Joplin 3.6.14 AppImage. Not verified: anything on Android, the Rich Text editor live, the trigger under Gboard.
 
 Process: the first publish of a new npm package cannot go through trusted publishing, so 0.1.0 was published locally with a web login and the OIDC trusted publisher configured right after, as Cockpit's first publish was; `publish.yml` skips a version that is already on the registry, so the release workflow stays green.
+
+## 2026-10-12 — v0.1.1: the first release through trusted publishing
+
+No code change. The README gained five screenshots taken in the e2e app (`e2e/showcase.spec.ts`, `SHOWCASE=1`) and the package's repository URL took npm's normalised form, which the npm page had not seen. The release exists to validate the trusted-publisher entry on npmjs.com, which npm now keeps only if one publish passes through it within two days of its creation; from this release on, a GitHub release publishes by itself.
