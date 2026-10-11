@@ -12,6 +12,7 @@ Version 0.1.0 is a first build to try on the desktop. It is not in the plugin re
 - **Jot from the selection…** in the editor's right-click menu. The first line of the highlighted text becomes the title and the rest the text. The shortcut does the same when text is highlighted.
 - **Typing `++`** at the start of a line or after a space in the Markdown editor. The trigger is a setting; empty turns it off. It never fires inside a word (`C++`), on a paste, or twice for the same occurrence: cancel the form once and that `++` is left alone.
 - **The Jot button** in the note toolbar, the feather icon.
+- **Edit with Jot…** in the note list's right-click menu: the same form prefilled with the note's title, type, notebook, tags and due date. Save writes only what you changed, and the note is never opened.
 
 ## The form
 
@@ -19,7 +20,7 @@ Type (To-do or Note), Title, Text, Notebook, Tags and Due. The title is focused 
 
 **Create** writes the note and stays where you are. **Create and open** opens it, in the editor or in a new window by setting. A form with no title and no text creates nothing. An empty title with text takes the first line of the text as the title.
 
-When the form was opened from highlighted text, an **In this note** row asks what to do with that text: keep it, replace it with a link to the new note, or add a link after it. When it was opened by `++`, the row asks whether to remove the `++` or replace it with the link. Jot remembers your last choice for each.
+When the form was opened from highlighted text, an **In this note** row asks what to do with that text: replace it with a link to the new note (the default), keep it, or add a link after it. When it was opened by `++`, the row asks whether to replace the `++` with the link (the default) or remove it. Jot remembers your last choice for each.
 
 ## Settings
 
@@ -30,7 +31,11 @@ Settings › Plugins › Jot: what Jot creates by default (a to-do or a note), w
 - Nothing has been checked on Android yet. The plugin installs there, but the form, the toolbar button and the trigger are untested on a phone.
 - In the Rich Text editor the typed trigger does not work (no plugin code runs there), and "Add a link after it" is not offered; the shortcut and the right-click entry work, and "Replace it with a link" writes the link as HTML.
 - The trigger ignores Markdown context: `++` after a space fires inside a code block too. Cancel once and that occurrence is left alone.
-- Editing an existing note's title, tags or due date without opening it, and Cockpit calling Jot from its buttons and row menu, come in a later version.
+- Cockpit calling Jot from its New note and New to-do buttons and its row menu comes in a later Cockpit version.
+
+## For other plugins
+
+`joplin.commands.execute('jot.open', args)`: with `{ mode: 'new', type, title, body, notebookId }` it opens the form with those presets and resolves `{ id, opened }`, or `null` on Cancel; with `{ mode: 'edit', noteId }` it opens edit mode and resolves `{ id, changed }`, the list of fields written, or `null`. With no arguments it behaves as the shortcut.
 
 ## Build from source
 
