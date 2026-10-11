@@ -44,10 +44,11 @@
     var REMOVE = 'remove'
     var LINK = 'link'
     var CANCEL = 'cancel'
-    // The choice each route starts on when nothing usable is remembered (a fresh install, a value the form does not offer): Replace it with a link on
-    // the selection route, Remove ++ on the trigger route. The buttons keep their drawn order (keep, replace, after; remove, link) either way.
+    // The choice each route starts on when nothing usable is remembered (a fresh install, a value the form does not offer): the link to the new note
+    // on both routes, Replace it with a link on the selection route and Replace ++ with a link on the trigger route. It is also the first button drawn
+    // (selectionChoices, triggerChoices), so "the default, else the first drawn" lands on the same button.
     var SELECTION_DEFAULT = REPLACE
-    var TRIGGER_DEFAULT = REMOVE
+    var TRIGGER_DEFAULT = LINK
     // The title Joplin shows for a note whose title is empty, used as the link's text so a link to such a note is never invisible.
     var UNTITLED = 'Untitled'
 
@@ -326,14 +327,14 @@
     }
 
     /** selectionChoices / inThisNoteAction **************************************************************************************************************
-     * The In this note buttons the selection route offers: Keep, Replace and Add after in the Markdown editor; Keep and Replace in the Rich Text editor,*
-     * where the selection comes back as plain text and writing it back would lose its formatting. inThisNoteAction is the choice that holds among the   *
-     * buttons offered, on either route: the value when it is one of them, otherwise the route's default `fallback` when offered (SELECTION_DEFAULT,    *
-     * replace; TRIGGER_DEFAULT, remove), otherwise the first offered. It is the form's default (from the choice remembered last time) and what a create *
-     * applies. selectionAction is its first name.                                                                                                      *
+     * The In this note buttons the selection route offers, the default first: Replace, Keep and Add after in the Markdown editor; Replace and Keep in    *
+     * the Rich Text editor, where the selection comes back as plain text and writing it back would lose its formatting. inThisNoteAction is the choice   *
+     * that holds among the buttons offered, on either route: the value when it is one of them, otherwise the route's default `fallback` when offered     *
+     * (SELECTION_DEFAULT, replace; TRIGGER_DEFAULT, link), otherwise the first offered. It is the form's default (from the choice remembered last time)  *
+     * and what a create applies. selectionAction is its first name.                                                                                      *
      ***************************************************************************************************************************************************/
     function selectionChoices(markdownEditor){
-        return markdownEditor ? [KEEP, REPLACE, AFTER] : [KEEP, REPLACE]
+        return markdownEditor ? [REPLACE, KEEP, AFTER] : [REPLACE, KEEP]
     }
 
     function inThisNoteAction(value, choices, fallback){
@@ -344,13 +345,13 @@
     }
 
     /** triggerChoices / triggerLabels / triggerAnswer ***************************************************************************************************
-     * The trigger route's In this note row (brief 4.4 and section 5): Remove ++ (the default until another is remembered) and Replace ++ with a link to *
-     * the new note, with the trigger the user typed printed in both labels. triggerAnswer is what the content script gets back once the form closes:    *
+     * The trigger route's In this note row (brief 4.4 and section 5): Replace ++ with a link to the new note (the default until another is remembered, *
+     * drawn first) and Remove ++, with the trigger the user typed printed in both labels. triggerAnswer is what the content script gets back once the form closes:    *
      * { action: 'remove' }, { action: 'link', link } with the Markdown link to the new note, or { action: 'cancel' } when nothing was created (Cancel,   *
      * Escape, an empty Create) or no choice of the two was made. The content script applies remove and link to the document; cancel changes nothing.   *
      ***************************************************************************************************************************************************/
     function triggerChoices(){
-        return [REMOVE, LINK]
+        return [LINK, REMOVE]
     }
 
     function triggerLabels(trigger){

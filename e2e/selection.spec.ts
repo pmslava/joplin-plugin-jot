@@ -114,7 +114,7 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
   /** Checks the In this note row (the three buttons, the remembered default) and picks `choice`. */
   async function chooseInThisNote(form: Frame, choice: string): Promise<void> {
     await expect(form.locator('#jotInThisNoteRow')).toBeVisible();
-    await expect(form.locator('.jot-choice-option')).toHaveText(['Keep the text', 'Replace it with a link to the new note', 'Add a link after it']);
+    await expect(form.locator('.jot-choice-option')).toHaveText(['Replace it with a link to the new note', 'Keep the text', 'Add a link after it']);
     await expect(form.locator('#jotInThisNote')).toHaveValue(lastChoice);
     await form.locator(`.jot-choice-option[data-choice="${choice}"]`).click();
     await expect(form.locator('#jotInThisNote')).toHaveValue(choice);

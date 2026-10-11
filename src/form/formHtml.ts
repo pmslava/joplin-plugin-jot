@@ -12,8 +12,8 @@
  * setHtml writes the markup through innerHTML, so the element is never executed, only read.                                                         *
  *                                                                                                                                                  *
  * THE IN THIS NOTE ROW (the selection and trigger routes, after Tags and before Due): the buttons the host offers - on the selection route        *
- * Keep the text, Replace it with a link to the new note, and in the Markdown editor Add a link after it; on the trigger route Remove ++ and Replace  *
- * ++ with a link to the new note, the trigger printed - drawn as radios in the Type toggle's pattern, with the choice in a hidden inThisNote. Their  *
+ * Replace it with a link to the new note, Keep the text, and in the Markdown editor Add a link after it; on the trigger route Replace ++ with a    *
+ * link to the new note and Remove ++, the trigger printed; the default first on both - drawn as radios in the Type toggle's pattern, with the choice in a hidden inThisNote. Their  *
  * labels come with them (inThisNoteLabels; the selection route's are formModel's SELECTION_LABELS). The island carries the same list and the        *
  * starting choice with the route's default ({ choices, value, fallback }, null on the plain routes), so the markup and the island never disagree.   *
  *                                                                                                                                                  *

@@ -107,8 +107,8 @@ function onJotTypeKeyDown(event){
 }
 
 /** In this note ***********************************************************************************************************************************
- * The selection and trigger routes. The buttons the host drew (the island's inThisNote.choices: Keep the text, Replace it with a link to the new   *
- * note, and in the Markdown editor Add a link after it; or Remove ++ and Replace ++ with a link to the new note) act as radios, as Type's do: one    *
+ * The selection and trigger routes. The buttons the host drew (the island's inThisNote.choices: Replace it with a link to the new note, Keep the   *
+ * text, and in the Markdown editor Add a link after it; or Replace ++ with a link to the new note and Remove ++) act as radios, as Type's do: one    *
  * tab stop, the selected one; the arrow keys move the choice, wrapping at both ends. The hidden inThisNote carries it, so Create sends it and a      *
  * refused Create reopens on it.                                                                                                                    *
  ***************************************************************************************************************************************************/
@@ -123,8 +123,8 @@ function setJotInThisNote(choice){
     var options = jotChoiceOptions()
     var known = false
     for (var index = 0; index < options.length; index++) if (options[index].getAttribute('data-choice') === choice) known = true
-    // An unknown choice is the route's default when it is drawn (the island's fallback: replace on the selection route, remove on the trigger
-    // route), else the first button drawn - formModel.inThisNoteAction's rule.
+    // An unknown choice is the route's default when it is drawn (the island's fallback: replace on the selection route, link on the trigger
+    // route, both drawn first), else the first button drawn - formModel.inThisNoteAction's rule.
     var fallback = jotData.inThisNote && jotData.inThisNote.fallback
     var drawn = false
     for (var each = 0; each < options.length; each++) if (options[each].getAttribute('data-choice') === fallback) drawn = true

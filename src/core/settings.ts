@@ -33,8 +33,9 @@ export const OPEN_IN_WINDOW = "window"
 // The In this note choices (formModel's KEEP, REPLACE, AFTER); replace is the default until the user picks another (formModel.SELECTION_DEFAULT).
 // An install that already remembers another choice keeps it.
 export const SELECTION_REPLACE = "replace"
-// The trigger route's choices (formModel's REMOVE, LINK); remove is the default until the user picks another.
-export const TRIGGER_REMOVE = "remove"
+// The trigger route's choices (formModel's LINK, REMOVE); link is the default until the user picks another (formModel.TRIGGER_DEFAULT). An
+// install that already remembers another choice keeps it.
+export const TRIGGER_LINK = "link"
 // The trigger's default (triggerRule's DEFAULT_TRIGGER).
 export const DEFAULT_TRIGGER = "++"
 
@@ -109,7 +110,7 @@ export async function setupSettings(){
         },
         [LAST_TRIGGER_ACTION_KEY]: {
             label: "In this note, the choice made last time (typed trigger)",
-            value: TRIGGER_REMOVE,
+            value: TRIGGER_LINK,
             type: SettingItemType.String,
             public: false,
             section: SECTION,
@@ -189,10 +190,10 @@ export async function getTrigger(): Promise<string> {
  ***************************************************************************************************************************************************/
 export async function getLastTriggerAction(){
     try {
-        return String((await joplin.settings.value(LAST_TRIGGER_ACTION_KEY)) || TRIGGER_REMOVE)
+        return String((await joplin.settings.value(LAST_TRIGGER_ACTION_KEY)) || TRIGGER_LINK)
     } catch (error) {
         console.warn("Jot: could not read the In this note choice made last time for the typed trigger", error)
-        return TRIGGER_REMOVE
+        return TRIGGER_LINK
     }
 }
 

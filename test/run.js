@@ -532,8 +532,8 @@ async function main() {
         }
         assert.deepStrictEqual([specs.lastSelectionAction.value, specs.lastSelectionAction.type, specs.lastSelectionAction.isEnum], ['replace', 2, undefined],
             'a per-device string, replace until the user picks another')
-        assert.deepStrictEqual([specs.lastTriggerAction.value, specs.lastTriggerAction.type, specs.lastTriggerAction.isEnum], ['remove', 2, undefined],
-            'a per-device string, remove until the user picks another')
+        assert.deepStrictEqual([specs.lastTriggerAction.value, specs.lastTriggerAction.type, specs.lastTriggerAction.isEnum], ['link', 2, undefined],
+            'a per-device string, link until the user picks another')
         const STRING = 2, BOOL = 3
         assert.deepStrictEqual(
             { label: specs.defaultType.label, description: specs.defaultType.description, value: specs.defaultType.value, type: specs.defaultType.type, isEnum: specs.defaultType.isEnum, options: specs.defaultType.options },
@@ -819,19 +819,19 @@ async function main() {
         assert.deepStrictEqual(positions.slice().sort((a, b) => a - b), positions, 'In this note comes after Tags and before Due, so the picker unfolds last and pushes nothing down')
         assert.ok(html.includes('<span class="jot-label" id="jotInThisNoteLabel">In this note</span>'))
         assert.ok(/<div class="jot-choice" role="radiogroup" aria-labelledby="jotInThisNoteLabel">/.test(html))
-        assert.deepStrictEqual(choiceLabels(html), ['Keep the text', 'Replace it with a link to the new note', 'Add a link after it'])
-        assert.ok(/data-choice="keep" role="radio" aria-checked="false" tabindex="-1">Keep the text</.test(html), 'Keep the text is drawn first')
+        assert.deepStrictEqual(choiceLabels(html), ['Replace it with a link to the new note', 'Keep the text', 'Add a link after it'], 'the default is drawn first')
+        assert.ok(/data-choice="keep" role="radio" aria-checked="false" tabindex="-1">Keep the text</.test(html), 'Keep the text is offered, not chosen')
         assert.ok(/data-choice="replace" role="radio" aria-checked="true" tabindex="0">Replace it with a link to the new note</.test(html), 'replace is the default')
         assert.ok(/<input type="hidden" name="inThisNote" id="jotInThisNote" value="replace">/.test(html))
         for (const button of html.match(/<button\b[^>]*>/g) || []) assert.ok(button.includes('type="button"'), `every button is type="button": ${button}`)
-        assert.deepStrictEqual(islandOf(html).data.inThisNote, { choices: ['keep', 'replace', 'after'], value: 'replace', fallback: 'replace' })
+        assert.deepStrictEqual(islandOf(html).data.inThisNote, { choices: ['replace', 'keep', 'after'], value: 'replace', fallback: 'replace' })
         assert.strictEqual(outcome, null)
         assert.deepStrictEqual([state.dataPosts, state.settingWrites], [[], []], 'Cancel writes nothing and remembers nothing')
     })
 
     await check('selection route: the In this note default is lastSelectionAction; the Rich Text editor (editor.codeView false, or unreadable) offers Keep and Replace only', async () => {
         const remembered = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'replace' } })
-        assert.deepStrictEqual(islandOf(remembered.state.dialogHtml[0]).data.inThisNote, { choices: ['keep', 'replace', 'after'], value: 'replace', fallback: 'replace' })
+        assert.deepStrictEqual(islandOf(remembered.state.dialogHtml[0]).data.inThisNote, { choices: ['replace', 'keep', 'after'], value: 'replace', fallback: 'replace' })
         const kept = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'keep' } })
         assert.strictEqual(islandOf(kept.state.dialogHtml[0]).data.inThisNote.value, 'keep', 'an install that remembers keep keeps it')
         assert.ok(/data-choice="replace" role="radio" aria-checked="true" tabindex="0"/.test(remembered.state.dialogHtml[0]))
@@ -840,14 +840,14 @@ async function main() {
         assert.strictEqual(islandOf(after.state.dialogHtml[0]).data.inThisNote.value, 'after')
         const richText = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'after' }, globalSettings: { 'editor.codeView': false } })
         const richHtml = richText.state.dialogHtml[0]
-        assert.deepStrictEqual(islandOf(richHtml).data.inThisNote, { choices: ['keep', 'replace'], value: 'replace', fallback: 'replace' },
+        assert.deepStrictEqual(islandOf(richHtml).data.inThisNote, { choices: ['replace', 'keep'], value: 'replace', fallback: 'replace' },
             'a remembered "after" falls back to the route\'s default, replace')
-        assert.deepStrictEqual(choiceLabels(richHtml), ['Keep the text', 'Replace it with a link to the new note'])
+        assert.deepStrictEqual(choiceLabels(richHtml), ['Replace it with a link to the new note', 'Keep the text'])
         assert.ok(!richHtml.includes('Add a link after it'), 'Add a link after it is not offered in the Rich Text editor')
         const richReplace = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'replace' }, globalSettings: { 'editor.codeView': false } })
         assert.strictEqual(islandOf(richReplace.state.dialogHtml[0]).data.inThisNote.value, 'replace')
         const unreadable = await openSelectionWith('Pay rent', { globalValueThrows: true })
-        assert.deepStrictEqual(islandOf(unreadable.state.dialogHtml[0]).data.inThisNote.choices, ['keep', 'replace'], 'an editor that cannot be told is treated as Rich Text')
+        assert.deepStrictEqual(islandOf(unreadable.state.dialogHtml[0]).data.inThisNote.choices, ['replace', 'keep'], 'an editor that cannot be told is treated as Rich Text')
         assert.strictEqual(unreadable.state.warnings.length, 1)
         assert.ok(unreadable.state.warnings[0].startsWith('Jot: could not tell which editor is open'), unreadable.state.warnings[0])
         const forged = await openSelectionWith('Pay rent', {
@@ -1014,7 +1014,7 @@ async function main() {
         const again = state.dialogHtml[1]
         assert.ok(/data-choice="after" role="radio" aria-checked="true" tabindex="0"/.test(again), 'after is still the checked radio')
         assert.ok(/name="inThisNote" id="jotInThisNote" value="after"/.test(again))
-        assert.deepStrictEqual(islandOf(again).data.inThisNote, { choices: ['keep', 'replace', 'after'], value: 'after', fallback: 'replace' })
+        assert.deepStrictEqual(islandOf(again).data.inThisNote, { choices: ['replace', 'keep', 'after'], value: 'after', fallback: 'replace' })
         assert.deepStrictEqual(state.globalReads, ['editor.codeView'], 'the editor is asked once, not on the reopen')
         assert.deepStrictEqual(state.executes.slice(1), [{ name: 'replaceSelection', args: [`Pay rent\nflat\n[Pay rent](:/${outcome.id})`] }])
     })
@@ -1030,7 +1030,7 @@ async function main() {
         for (const message of [{ type: 'lint' }, {}, null, 'config', 42]) assert.strictEqual(await handler(message), null, JSON.stringify(message))
     })
 
-    await check('trigger handler: a trigger message opens the form on the trigger route - no prefill, no selection read, In this note with Remove ++ and Replace ++ with a link to the new note, remove first - and Cancel answers cancel', async () => {
+    await check('trigger handler: a trigger message opens the form on the trigger route - no prefill, no selection read, In this note with Replace ++ with a link to the new note and Remove ++, the link first and the default - and Cancel answers cancel', async () => {
         const { state, answer } = await fireTriggerWith({})
         assert.deepStrictEqual(answer, { action: 'cancel' })
         assert.strictEqual(state.dialogOpens, 1)
@@ -1041,27 +1041,30 @@ async function main() {
         assert.ok(html.includes('>\n</textarea>'), 'no text prefill')
         assert.ok(html.includes('<strong id="jotHeading" class="jot-heading">New to-do</strong>'), 'the default type')
         assert.ok(/name="notebookId" id="jotNotebookId" value="fWork"/.test(html), 'the notebook of the note the editor holds')
-        assert.deepStrictEqual(choiceLabels(html), ['Remove ++', 'Replace ++ with a link to the new note'])
-        assert.ok(/data-choice="remove" role="radio" aria-checked="true" tabindex="0">Remove \+\+</.test(html), 'remove is the default')
-        assert.ok(/<input type="hidden" name="inThisNote" id="jotInThisNote" value="remove">/.test(html))
-        assert.deepStrictEqual(islandOf(html).data.inThisNote, { choices: ['remove', 'link'], value: 'remove', fallback: 'remove' })
+        assert.deepStrictEqual(choiceLabels(html), ['Replace ++ with a link to the new note', 'Remove ++'])
+        assert.ok(/data-choice="link" role="radio" aria-checked="true" tabindex="0">Replace \+\+ with a link to the new note</.test(html), 'link is the default')
+        assert.ok(/<input type="hidden" name="inThisNote" id="jotInThisNote" value="link">/.test(html))
+        assert.deepStrictEqual(islandOf(html).data.inThisNote, { choices: ['link', 'remove'], value: 'link', fallback: 'link' })
         for (const button of html.match(/<button\b[^>]*>/g) || []) assert.ok(button.includes('type="button"'), `every button is type="button": ${button}`)
         assert.deepStrictEqual([state.dataPosts, state.settingWrites], [[], []], 'Cancel writes nothing and remembers nothing')
     })
 
-    await check('trigger handler: the labels print the trigger fired with (HTML-escaped), the setting when the message has none; the default is lastTriggerAction, an unknown one is remove', async () => {
+    await check('trigger handler: the labels print the trigger fired with (HTML-escaped), the setting when the message has none; the default is lastTriggerAction, an unknown one is link', async () => {
         const custom = await fireTriggerWith({}, ';;')
-        assert.deepStrictEqual(choiceLabels(custom.state.dialogHtml[0]), ['Remove ;;', 'Replace ;; with a link to the new note'])
+        assert.deepStrictEqual(choiceLabels(custom.state.dialogHtml[0]), ['Replace ;; with a link to the new note', 'Remove ;;'])
         const odd = await fireTriggerWith({}, '<b>')
         assert.ok(odd.state.dialogHtml[0].includes('>Remove &lt;b&gt;</button>'), 'the trigger is escaped in the markup')
         const { handler, state } = await triggerHandlerWith({ settings: { trigger: '@@' } })
         await handler({ type: 'trigger', from: 0, to: 2 })
-        assert.deepStrictEqual(choiceLabels(state.dialogHtml[0]), ['Remove @@', 'Replace @@ with a link to the new note'])
+        assert.deepStrictEqual(choiceLabels(state.dialogHtml[0]), ['Replace @@ with a link to the new note', 'Remove @@'])
+        const kept = await fireTriggerWith({ settings: { lastTriggerAction: 'remove' } })
+        assert.deepStrictEqual(islandOf(kept.state.dialogHtml[0]).data.inThisNote, { choices: ['link', 'remove'], value: 'remove', fallback: 'link' }, 'an install that remembers remove keeps it')
+        assert.ok(/data-choice="remove" role="radio" aria-checked="true" tabindex="0"/.test(kept.state.dialogHtml[0]))
         const remembered = await fireTriggerWith({ settings: { lastTriggerAction: 'link' } })
-        assert.deepStrictEqual(islandOf(remembered.state.dialogHtml[0]).data.inThisNote, { choices: ['remove', 'link'], value: 'link', fallback: 'remove' })
+        assert.deepStrictEqual(islandOf(remembered.state.dialogHtml[0]).data.inThisNote, { choices: ['link', 'remove'], value: 'link', fallback: 'link' })
         assert.ok(/data-choice="link" role="radio" aria-checked="true" tabindex="0"/.test(remembered.state.dialogHtml[0]))
         const bogus = await fireTriggerWith({ settings: { lastTriggerAction: 'keep' } })
-        assert.strictEqual(islandOf(bogus.state.dialogHtml[0]).data.inThisNote.value, 'remove', 'the selection route\'s keep is not a trigger choice')
+        assert.strictEqual(islandOf(bogus.state.dialogHtml[0]).data.inThisNote.value, 'link', 'the selection route\'s keep is not a trigger choice: the default, link')
     })
 
     await check('trigger handler: Create with remove answers { action: \'remove\' }; with link { action: \'link\', link: [Title](:/id) } as the selection route builds it; the choice is remembered', async () => {
@@ -1076,7 +1079,7 @@ async function main() {
         const emptied = await fireTriggerWith({ dialogResults: [formResult('ok', { title: '', body: 'First line\nrest', inThisNote: 'link' })] })
         assert.deepStrictEqual(emptied.answer, { action: 'link', link: '[First line](:/note0001)' }, 'the title the empty-title rule gave')
         const missing = await fireTriggerWith({ dialogResults: [formResult('ok', { title: 'No field' })] })
-        assert.deepStrictEqual(missing.answer, { action: 'remove' }, 'a result without the field is the first choice, remove')
+        assert.deepStrictEqual(missing.answer, { action: 'link', link: '[No field](:/note0001)' }, 'a result without the field is the route\'s default, the link')
     })
 
     await check('trigger handler: an empty Create, Escape and any other button answer cancel and write nothing; a refused Create reopens and then answers', async () => {
@@ -1092,8 +1095,8 @@ async function main() {
             ],
         })
         assert.strictEqual(refused.state.dialogOpens, 2)
-        assert.deepStrictEqual(islandOf(refused.state.dialogHtml[1]).data.inThisNote, { choices: ['remove', 'link'], value: 'link', fallback: 'remove' }, 'the choice is kept on the reopen')
-        assert.deepStrictEqual(choiceLabels(refused.state.dialogHtml[1]), ['Remove ++', 'Replace ++ with a link to the new note'])
+        assert.deepStrictEqual(islandOf(refused.state.dialogHtml[1]).data.inThisNote, { choices: ['link', 'remove'], value: 'link', fallback: 'link' }, 'the choice is kept on the reopen')
+        assert.deepStrictEqual(choiceLabels(refused.state.dialogHtml[1]), ['Replace ++ with a link to the new note', 'Remove ++'])
         assert.deepStrictEqual(refused.answer, { action: 'link', link: '[Pay rent](:/note0001)' })
         const none = await fireTriggerWith({ folders: [] })
         assert.deepStrictEqual([none.answer, none.state.messageBoxes], [{ action: 'cancel' }, ['Jot: there is no notebook to create in.']])
@@ -1245,8 +1248,8 @@ async function main() {
 
     await check('formModel: the In this note choices and labels, the remembered default, the link as Joplin\'s markdownTag, the edit for each choice, and planCreate\'s inThisNote', () => {
         assert.deepStrictEqual(FormModel.SELECTION_LABELS, { keep: 'Keep the text', replace: 'Replace it with a link to the new note', after: 'Add a link after it' })
-        assert.deepStrictEqual(FormModel.selectionChoices(true), ['keep', 'replace', 'after'])
-        assert.deepStrictEqual(FormModel.selectionChoices(false), ['keep', 'replace'])
+        assert.deepStrictEqual(FormModel.selectionChoices(true), ['replace', 'keep', 'after'], 'the default drawn first')
+        assert.deepStrictEqual(FormModel.selectionChoices(false), ['replace', 'keep'])
         assert.strictEqual(FormModel.SELECTION_DEFAULT, 'replace', 'the selection route starts on Replace it with a link')
         assert.strictEqual(FormModel.selectionAction('after', ['keep', 'replace', 'after'], FormModel.SELECTION_DEFAULT), 'after')
         assert.strictEqual(FormModel.selectionAction('keep', ['keep', 'replace', 'after'], FormModel.SELECTION_DEFAULT), 'keep', 'a remembered keep holds')
@@ -1280,7 +1283,7 @@ async function main() {
     })
 
     await check('formModel: the trigger route\'s choices, labels with the trigger printed, the answer shapes, and inThisNoteAction falling back to the first offered', () => {
-        assert.deepStrictEqual(FormModel.triggerChoices(), ['remove', 'link'])
+        assert.deepStrictEqual(FormModel.triggerChoices(), ['link', 'remove'], 'the default drawn first')
         assert.deepStrictEqual(FormModel.triggerLabels('++'), { remove: 'Remove ++', link: 'Replace ++ with a link to the new note' })
         assert.deepStrictEqual(FormModel.triggerLabels(';;jot'), { remove: 'Remove ;;jot', link: 'Replace ;;jot with a link to the new note' })
         assert.deepStrictEqual(FormModel.triggerAnswer('remove', '[T](:/x)'), { action: 'remove' })
@@ -1288,9 +1291,12 @@ async function main() {
         assert.deepStrictEqual(FormModel.triggerAnswer('link', ''), { action: 'cancel' }, 'a link with no text is no answer to apply')
         for (const choice of [null, undefined, 'keep', 'cancel']) assert.deepStrictEqual(FormModel.triggerAnswer(choice, '[T](:/x)'), { action: 'cancel' })
         assert.strictEqual(FormModel.inThisNoteAction('link', ['remove', 'link']), 'link')
-        for (const value of ['', 'keep', 'bogus', undefined]) assert.strictEqual(FormModel.inThisNoteAction(value, ['remove', 'link'], FormModel.TRIGGER_DEFAULT), 'remove')
+        assert.strictEqual(FormModel.inThisNoteAction('remove', FormModel.triggerChoices(), FormModel.TRIGGER_DEFAULT), 'remove', 'a remembered remove holds')
+        for (const value of ['', 'keep', 'bogus', undefined]) assert.strictEqual(FormModel.inThisNoteAction(value, FormModel.triggerChoices(), FormModel.TRIGGER_DEFAULT), 'link')
         for (const value of ['', 'keep', 'bogus', undefined]) assert.strictEqual(FormModel.inThisNoteAction(value, ['remove', 'link']), 'remove', 'with no default: the first offered')
-        assert.strictEqual(FormModel.TRIGGER_DEFAULT, 'remove')
+        assert.strictEqual(FormModel.TRIGGER_DEFAULT, 'link')
+        assert.strictEqual(FormModel.inThisNoteAction('bogus', FormModel.triggerChoices()), FormModel.TRIGGER_DEFAULT, 'the first drawn is the default: the two fallbacks coincide')
+        assert.strictEqual(FormModel.inThisNoteAction('bogus', FormModel.selectionChoices(true)), FormModel.SELECTION_DEFAULT)
         assert.strictEqual(FormModel.inThisNoteAction('x', [], 'replace'), '', 'nothing offered: no choice')
         assert.strictEqual(FormModel.selectionAction, FormModel.inThisNoteAction, 'selectionAction is the same rule under its first name')
         const options = { defaultType: 'todo', dayStart: '09:00', notebookId: 'fWork', inThisNoteChoices: ['remove', 'link'] }

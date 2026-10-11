@@ -23,7 +23,7 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
   const api = dataApi(API_PORT, API_TOKEN);
   const book = `Jot Trigger ${stamp}`;
   let bookId = '';
-  let lastChoice = 'remove';
+  let lastChoice = 'link';
   // How long a case waits to be sure that something did NOT open the form.
   const QUIET_MS = 2500;
 
@@ -36,7 +36,7 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
     const found = folders.items.find((folder: any) => folder.title === book);
     if (!found) throw new Error(`no notebook ${book}`);
     bookId = found.id;
-    lastChoice = 'remove';
+    lastChoice = 'link';
   });
 
   test.afterAll(async () => {
@@ -128,7 +128,7 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
   /** Checks the In this note row of the trigger route (the two buttons with the trigger printed, the remembered default). */
   async function expectTriggerRow(form: Frame, trigger = '++'): Promise<void> {
     await expect(form.locator('#jotInThisNoteRow')).toBeVisible();
-    await expect(form.locator('.jot-choice-option')).toHaveText([`Remove ${trigger}`, `Replace ${trigger} with a link to the new note`]);
+    await expect(form.locator('.jot-choice-option')).toHaveText([`Replace ${trigger} with a link to the new note`, `Remove ${trigger}`]);
     await expect(form.locator('#jotInThisNote')).toHaveValue(lastChoice);
     await expect(form.locator('#jotTitle')).toHaveValue('');
   }
@@ -146,6 +146,7 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
 
     const form = await formFrame(win);
     await expectTriggerRow(form);
+    await choose(form, 'remove');
     await form.locator('#jotTitle').fill(title);
     await dialogButton(win, 'Create').click();
     await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);

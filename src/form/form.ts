@@ -9,7 +9,7 @@
  * land there) - and remembered in lastSelectionAction for next time.                                                                               *
  *                                                                                                                                                  *
  * THE TRIGGER ROUTE. openTriggerForm(trigger) is what the typed trigger's message runs (src/trigger.ts): the plain form with no prefill, plus the In *
- * this note row with Remove ++ and Replace ++ with a link to the new note (the trigger printed), starting on lastTriggerAction. The edit is not      *
+ * this note row with Replace ++ with a link to the new note and Remove ++ (the trigger printed), starting on lastTriggerAction. The edit is not      *
  * made here: the content script makes it in the editor, as one transaction, once it has the answer this resolves ({ action: 'remove' }, { action:  *
  * 'link', link } or { action: 'cancel' }), and the choice is remembered after the create. Create and open therefore does not open at once - the     *
  * editor would switch to the new note before the content script's edit reached the note the trigger was typed in - but puts the new note's id in    *
@@ -198,8 +198,8 @@ async function withFormOpen<T>(work: () => Promise<T>): Promise<T | null> {
 }
 
 /** inThisNoteFor ***********************************************************************************************************************************
- * The In this note row of one open. The selection route: Keep, Replace (and Add after in the Markdown editor), starting on lastSelectionAction,    *
- * else on Replace. The trigger route: Remove and Replace with a link, labelled with the trigger, starting on lastTriggerAction, else on Remove.      *
+ * The In this note row of one open. The selection route: Replace, Keep (and Add after in the Markdown editor), starting on lastSelectionAction,    *
+ * else on Replace. The trigger route: Replace with a link and Remove, labelled with the trigger, starting on lastTriggerAction, else on the link.   *
  * Every other route: no row, and nothing is read.                                                                                                  *
  ***************************************************************************************************************************************************/
 async function inThisNoteFor(route: string, presets: FormPresets): Promise<InThisNote> {
