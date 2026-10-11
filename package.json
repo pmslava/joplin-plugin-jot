@@ -5,7 +5,7 @@
   "author": "pmslava",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pmslava/joplin-plugin-jot"
+    "url": "git+https://github.com/pmslava/joplin-plugin-jot.git"
   },
   "publishConfig": {
     "access": "public"
