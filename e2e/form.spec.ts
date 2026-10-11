@@ -152,6 +152,40 @@ test.describe('The form, create mode (desktop)', () => {
     expect(note.parent_id).toBe(await folderId(other));
   });
 
+  test('a click in the Notebook field opens the whole list on the current notebook; the chevron opens it too; a clicked row is where Create puts the note', async () => {
+    const { win } = joplin;
+    const title = `jot-combo-${stamp}`;
+    const pending = startJot(win);
+    const form = await formFrame(win);
+    await form.locator('#jotTitle').fill(title);
+    const heightBefore = await dialogHeight(win);
+
+    await form.locator('#jotNotebook').click();
+    await expect(form.locator('#jotNotebookList')).toBeVisible();
+    await expect(form.locator('#jotNotebookList .jot-suggest-row', { hasText: other })).toHaveCount(1);
+    await expect(form.locator('#jotNotebookList .jot-suggest-row.-highlighted')).toHaveText(book);
+    expect(await dialogHeight(win)).toBe(heightBefore);
+
+    // Escape closes the list; the chevron opens it again, with the focus still in the field.
+    await win.keyboard.press('Escape');
+    await expect(form.locator('#jotNotebookList')).toBeHidden();
+    await form.locator('#jotNotebookOpen').click();
+    await expect(form.locator('#jotNotebookList')).toBeVisible();
+    await expect(form.locator('#jotNotebookList .jot-suggest-row.-highlighted')).toHaveText(book);
+    expect(await form.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')).toBe('jotNotebook');
+
+    await form.locator('#jotNotebookList .jot-suggest-row', { hasText: other }).click();
+    await expect(form.locator('#jotNotebookList')).toBeHidden();
+    await expect(form.locator('#jotNotebook')).toHaveValue(other);
+
+    await dialogButton(win, 'Create').click();
+    await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
+    const outcome = await pending;
+    const note = await readNote(outcome.id);
+    expect(note.title).toBe(title);
+    expect(note.parent_id).toBe(await folderId(other));
+  });
+
   test('a Notebook filter left by a mouse click on Create takes the highlighted notebook', async () => {
     const { win } = joplin;
     const title = `jot-click-${stamp}`;

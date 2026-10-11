@@ -13,7 +13,8 @@ import { callPluginCommand, createNotebook, dataApi, dataApiSettings, selectedNo
  * What the In this note choice did to the source note is read back through the data API once the editor has saved.
  *
  * The In this note default is the choice remembered from the last create in this profile, so `lastChoice` follows
- * it; it is reset in beforeAll, with the fresh profile, so a retried case in a new worker expects the right one.
+ * it; it is reset in beforeAll, with the fresh profile (whose default is replace), so a retried case in a new worker
+ * expects the right one.
  */
 test.describe('The selection route (desktop, Markdown editor)', () => {
   let joplin: JoplinInstance;
@@ -23,7 +24,7 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
   const api = dataApi(API_PORT, API_TOKEN);
   const book = `Jot Selection ${stamp}`;
   let bookId = '';
-  let lastChoice = 'keep';
+  let lastChoice = 'replace';
 
   test.beforeAll(async () => {
     joplin = await launchJoplin({ envDev: true, settings: dataApiSettings(API_PORT, API_TOKEN) });
@@ -34,7 +35,7 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
     const found = folders.items.find((folder: any) => folder.title === book);
     if (!found) throw new Error(`no notebook ${book}`);
     bookId = found.id;
-    lastChoice = 'keep';
+    lastChoice = 'replace';
   });
 
   test.afterAll(async () => {

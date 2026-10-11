@@ -21,7 +21,7 @@
 
 /** State of the current open **********************************************************************************************************************/
 // The island of the current open: { notebooks: [{id, path}], tags: [title], defaults: { type, notebookId, dayStart }, pickerOpen,
-// inThisNote: { choices, value } on the selection and trigger routes, else null }.
+// inThisNote: { choices, value, fallback } on the selection and trigger routes, else null }.
 var jotData = { notebooks: [], tags: [], defaults: {}, pickerOpen: false, inThisNote: null }
 // The open suggestion list: { kind: 'notebook'|'tag', input, list, rows, highlight, token, moved }, or null when none is open. moved is whether the
 // user went to the highlighted row with the arrow keys (formModel.pickOnLeave).
@@ -123,8 +123,12 @@ function setJotInThisNote(choice){
     var options = jotChoiceOptions()
     var known = false
     for (var index = 0; index < options.length; index++) if (options[index].getAttribute('data-choice') === choice) known = true
-    // An unknown choice is the first button drawn: keep on the selection route, remove on the trigger route (formModel.inThisNoteAction's rule).
-    var value = known ? choice : (options.length ? options[0].getAttribute('data-choice') : '')
+    // An unknown choice is the route's default when it is drawn (the island's fallback: replace on the selection route, remove on the trigger
+    // route), else the first button drawn - formModel.inThisNoteAction's rule.
+    var fallback = jotData.inThisNote && jotData.inThisNote.fallback
+    var drawn = false
+    for (var each = 0; each < options.length; each++) if (options[each].getAttribute('data-choice') === fallback) drawn = true
+    var value = known ? choice : (drawn ? fallback : (options.length ? options[0].getAttribute('data-choice') : ''))
     input.value = value
     for (var row = 0; row < options.length; row++){
         var selected = options[row].getAttribute('data-choice') === value
@@ -210,15 +214,18 @@ function onJotBellClick(){
 }
 
 /** Suggestion lists *******************************************************************************************************************************
- * Notebook: the rows are the notebooks whose path survives the filter (the text typed); a pick writes the path into the input and the id into the    *
- * hidden notebookId. The typed text is only a filter: on leaving the field with no row taken it goes back to the picked notebook's path, and Enter  *
- * with no row left to pick does nothing, so a note is never created in a notebook other than the one the field (or its list) shows.                *
+ * Notebook, a combobox: focusing or clicking the field, or its chevron, opens the whole list with the picked notebook highlighted and in view;       *
+ * typing narrows it. The rows are the notebooks whose path survives the filter (the text typed); a pick writes the path into the input and the id    *
+ * into the hidden notebookId. The typed text is only a filter: on leaving the field with no row taken it goes back to the picked notebook's path,    *
+ * and Enter with no row left to pick does nothing, so a note is never created in a notebook other than the one the field (or its list) shows.        *
  * Tags: the rows are the tag titles matching the comma-separated token being typed, minus those already in the field; a pick replaces that token     *
- * only. The csv is the value, so a tag that does not exist yet is simply typed and is created on Create.                                            *
- * Leaving a field while its list is open (Tab, a click on Create or on another field) takes the highlighted row first when formModel.pickOnLeave    *
- * says so: in Notebook when a filter is typed or the user arrowed to the row, in Tags only when the user arrowed to it. Escape closes the list alone. *
- * Both lists sit in the form (position: relative) out of the flow, under their input when the form has room below it, else over it, capped to that  *
- * room: the form's size, which is what Joplin measures, never changes.                                                                              *
+ * only. The csv is the value, so a tag that does not exist yet is simply typed and is created on Create. The list opens as one types; focusing the   *
+ * empty field opens every tag with none highlighted (formModel.tagListOnFocus), so Enter still creates there.                                        *
+ * Leaving a field while its list is open (Tab, a click on Create or on another field) takes the highlighted row first when formModel.pickOnLeave     *
+ * says so: in Notebook when a filter is typed or the user arrowed to the row, in Tags only when the user arrowed to it. Escape closes the list       *
+ * alone.                                                                                                                                             *
+ * Both lists sit in the form (position: relative) out of the flow, under their input when the form has room below it, else over it, capped to that   *
+ * room: the form's size, which is what Joplin measures, never changes.                                                                               *
  ***************************************************************************************************************************************************/
 function jotNotebookPath(id){
     var notebooks = jotData.notebooks
@@ -313,17 +320,18 @@ function leaveJotSuggest(input){
     else closeJotSuggest()
 }
 
+// showAll: the whole list, the picked notebook highlighted and scrolled into view (formModel.notebookListAll); otherwise the rows the typed filter
+// leaves, the notebook typed in full highlighted when there is one (formModel.notebookHighlight), so Enter picks what was typed.
 function showNotebookSuggestions(showAll){
     var input = jotById('jotNotebook')
-    var pickedId = jotById('jotNotebookId').value
-    var filter = showAll ? '' : input.value
-    var rows = model().notebookSuggestions(jotData.notebooks, filter)
-    // A filter highlights the notebook typed in full when there is one (formModel.notebookHighlight), so Enter picks what was typed.
-    var highlight = showAll ? 0 : model().notebookHighlight(rows, filter)
+    var list = jotById('jotNotebookList')
     if (showAll){
-        for (var index = 0; index < rows.length; index++) if (rows[index].id === pickedId) highlight = index
+        var all = model().notebookListAll(jotData.notebooks, jotById('jotNotebookId').value)
+        openJotSuggest('notebook', input, list, all.rows, all.highlight)
+        return
     }
-    openJotSuggest('notebook', input, jotById('jotNotebookList'), rows, rows.length ? highlight : -1)
+    var rows = model().notebookSuggestions(jotData.notebooks, input.value)
+    openJotSuggest('notebook', input, list, rows, model().notebookHighlight(rows, input.value))
 }
 
 function showTagSuggestions(){
@@ -401,13 +409,33 @@ function onJotNotebookInput(){
     showNotebookSuggestions(false)
 }
 
-// Entering the Notebook field selects its text, so typing starts a filter at once. A click would put the caret back where the pointer was on
-// its mouseup, so the first mouseup after the focus selects again.
+// Entering the Notebook field selects its text, so typing starts a filter at once, and opens the whole list. A click would put the caret back
+// where the pointer was on its mouseup, so the first mouseup after the focus selects again.
 var jotNotebookSelectOnMouseUp = false
 
 function onJotNotebookFocus(event){
     event.currentTarget.select()
     jotNotebookSelectOnMouseUp = true
+    showNotebookSuggestions(!notebookTextIsFilter())
+}
+
+// A click in the field (already focused, its list closed by a pick or by Escape) opens the list again.
+function onJotNotebookClick(event){
+    if (jotSuggest && jotSuggest.input === event.currentTarget) return
+    showNotebookSuggestions(!notebookTextIsFilter())
+}
+
+// The chevron: a press gives the field the focus (its focus opens the list) or, when it has it, opens the list. The press itself never takes the
+// focus (preventDefault), so the field is not left and its list not closed on the way.
+function onJotNotebookOpenMouseDown(event){
+    event.preventDefault()
+    var input = jotById('jotNotebook')
+    if (document.activeElement !== input){
+        input.focus()
+        // The mouseup lands on the chevron, not in the field: nothing to re-select there.
+        jotNotebookSelectOnMouseUp = false
+    }
+    if (!(jotSuggest && jotSuggest.input === input)) showNotebookSuggestions(!notebookTextIsFilter())
 }
 
 function onJotNotebookMouseUp(event){
@@ -425,6 +453,13 @@ function onJotNotebookBlur(event){
 
 function onJotTagsInput(){
     showTagSuggestions()
+}
+
+// Focusing the empty Tags field offers every tag, none highlighted (formModel.tagListOnFocus); with a tag typed it opens nothing.
+function onJotTagsFocus(event){
+    var input = event.currentTarget
+    var opening = model().tagListOnFocus(jotData.tags, input.value)
+    if (opening.rows.length) openJotSuggest('tag', input, jotById('jotTagList'), opening.rows, opening.highlight, model().tagTokenAt(input.value, 0))
 }
 
 // A click moves the caret off the token the list was made for, as the arrow keys do.
@@ -724,13 +759,16 @@ function initJotFormIfNeeded(){
     notebook.addEventListener('input', onJotNotebookInput)
     notebook.addEventListener('keydown', onJotSuggestKeyDown)
     notebook.addEventListener('focus', onJotNotebookFocus)
+    notebook.addEventListener('click', onJotNotebookClick)
     notebook.addEventListener('mouseup', onJotNotebookMouseUp)
     notebook.addEventListener('blur', onJotNotebookBlur)
+    jotById('jotNotebookOpen').addEventListener('mousedown', onJotNotebookOpenMouseDown)
 
     var tags = jotById('jotTags')
     tags.addEventListener('input', onJotTagsInput)
     tags.addEventListener('keydown', onJotSuggestKeyDown)
     tags.addEventListener('mousedown', onJotTagsMouseDown)
+    tags.addEventListener('focus', onJotTagsFocus)
     tags.addEventListener('blur', onJotTagsBlur)
 
     var lists = [jotById('jotNotebookList'), jotById('jotTagList')]

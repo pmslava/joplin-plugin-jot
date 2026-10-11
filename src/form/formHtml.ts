@@ -11,11 +11,11 @@
  * notebook id, day start time) - travels in a <script type="application/json"> element, with every "<" written as < so no value can close it.  *
  * setHtml writes the markup through innerHTML, so the element is never executed, only read.                                                         *
  *                                                                                                                                                  *
- * THE IN THIS NOTE ROW (the selection and trigger routes, after the Due row and its picker): the buttons the host offers - on the selection route  *
+ * THE IN THIS NOTE ROW (the selection and trigger routes, after Tags and before Due): the buttons the host offers - on the selection route        *
  * Keep the text, Replace it with a link to the new note, and in the Markdown editor Add a link after it; on the trigger route Remove ++ and Replace  *
  * ++ with a link to the new note, the trigger printed - drawn as radios in the Type toggle's pattern, with the choice in a hidden inThisNote. Their  *
  * labels come with them (inThisNoteLabels; the selection route's are formModel's SELECTION_LABELS). The island carries the same list and the        *
- * starting choice ({ choices, value }, null on the plain routes), so the markup and the island never disagree about what is offered.              *
+ * starting choice with the route's default ({ choices, value, fallback }, null on the plain routes), so the markup and the island never disagree.   *
  *                                                                                                                                                  *
  * The picker section is Cockpit's set alarm dialog (src/ui/alarm/alarm.ts, openAlarmDialog), single to-do only: the YYYY-MM-DD and HH:MM inputs,   *
  * the two rows of quick buttons, the calendar and the two time columns, with the same ids and the same inline handlers, which formWebview.js        *
@@ -48,12 +48,16 @@ export interface FormView {
     inThisNoteChoices?: string[]
     // Their labels by choice (formModel.triggerLabels on the trigger route); a choice without one shows its SELECTION_LABELS label.
     inThisNoteLabels?: { [choice: string]: string }
+    // The route's default choice (formModel.SELECTION_DEFAULT or TRIGGER_DEFAULT): what a starting value the buttons do not offer reads as.
+    inThisNoteDefault?: string
 }
 
 /** Imports *****************************************************************************************************************************************/
 const FormModel = require("./formModel")
 
 /** Constants ***************************************************************************************************************************************/
+// The chevron at the Notebook field's right edge, which opens the list: Material Design's "arrow_drop_down" glyph (Apache 2.0), inlined as the bell is.
+const CHEVRON_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true" focusable="false"><path d="M7 10l5 5 5-5z"/></svg>'
 // The bell beside the Due row: Material Design's "notifications" glyph (Apache 2.0), inlined so it needs no icon font on either platform.
 const BELL_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true" focusable="false">'
     + '<path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 '
@@ -89,14 +93,15 @@ export function buildFormHtml(view: FormView): string {
     const notebook = view.notebooks.find(item => item.id === values.notebookId)
     const hasDue = !!(String(values.dueDate || "").trim() || String(values.dueTime || "").trim())
     const choices: string[] = Array.isArray(view.inThisNoteChoices) ? view.inThisNoteChoices : []
-    const choice = choices.length ? FormModel.inThisNoteAction(values.inThisNote, choices) : ""
+    const fallback = choices.length ? FormModel.inThisNoteAction(view.inThisNoteDefault, choices) : ""
+    const choice = choices.length ? FormModel.inThisNoteAction(values.inThisNote, choices, fallback) : ""
     const labels: { [choice: string]: string } = view.inThisNoteLabels || {}
     const island = islandJson({
         notebooks: view.notebooks.map(item => ({ id: item.id, path: item.path })),
         tags: view.tags,
         defaults: { type: type, notebookId: values.notebookId, dayStart: view.dayStart },
         pickerOpen: !!view.pickerOpen,
-        inThisNote: choices.length ? { choices: choices, value: choice } : null,
+        inThisNote: choices.length ? { choices: choices, value: choice, fallback: fallback } : null,
     })
     // A hidden marker on mobile only, as Cockpit's #cockpitPlatform: the script mirrors it onto #joplin-plugin-content as the jot-mobile class,
     // which the narrow layout in form.css is gated on (never a viewport @media query, which would also match Joplin's measuring pass).
@@ -144,15 +149,18 @@ export function buildFormHtml(view: FormView): string {
             </div>
             <div class="jot-row">
                 <label class="jot-label" for="jotNotebook">Notebook</label>
-                <input type="text" id="jotNotebook" class="jot-input" value="${escapeHtml(notebook ? notebook.path : "")}" ${textInput} spellcheck="false"
-                    role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="jotNotebookList">
+                <div class="jot-combo">
+                    <input type="text" id="jotNotebook" class="jot-input" value="${escapeHtml(notebook ? notebook.path : "")}" ${textInput} spellcheck="false"
+                        role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="jotNotebookList">
+                    <button type="button" id="jotNotebookOpen" class="jot-combo-open" tabindex="-1" aria-hidden="true">${CHEVRON_ICON}</button>
+                </div>
                 <input type="hidden" name="notebookId" id="jotNotebookId" value="${escapeHtml(values.notebookId)}">
             </div>
             <div class="jot-row">
                 <label class="jot-label" for="jotTags">Tags</label>
                 <input type="text" name="tags" id="jotTags" class="jot-input" value="${escapeHtml(values.tags)}" ${textInput} spellcheck="false"
                     role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="jotTagList">
-            </div>
+            </div>${inThisNoteRow}
             <div class="jot-row jot-due-row" id="jotDueRow">
                 <span class="jot-label">Due</span>
                 <span id="jotDueText" class="jot-due-text">${escapeHtml(FormModel.dueText(values.dueDate, values.dueTime))}</span>
@@ -191,7 +199,7 @@ export function buildFormHtml(view: FormView): string {
                         <div class="alarm-time-col"><div class="alarm-time-scroll" id="alarmMinuteCol"></div></div>
                     </div>
                 </div>
-            </div>${inThisNoteRow}
+            </div>
             <div id="jotNotebookList" class="jot-suggest" role="listbox" aria-label="Notebooks" hidden></div>
             <div id="jotTagList" class="jot-suggest" role="listbox" aria-label="Tags" hidden></div>
         </form>

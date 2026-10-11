@@ -69,6 +69,43 @@
 .jot-input:focus {
     border-color: var(--joplin-focus-outline-color, var(--joplin-url-color, #2D6BDC));
 }
+/* The Notebook field is a combobox: the input takes the row's width, and the chevron sits inside its right edge (the
+ * input keeps room for it), so the list it opens is placed against the input as before. */
+.jot-combo {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.jot-combo .jot-input {
+    width: 100%;
+    padding-right: 26px;
+}
+.jot-combo-open {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    bottom: 1px;
+    width: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    color: var(--joplin-color, currentColor);
+    background: none;
+    border: none;
+    border-radius: 2px;
+    opacity: 0.7;
+    cursor: pointer;
+}
+.jot-combo-open:hover {
+    opacity: 1;
+    background-color: rgba(127, 127, 127, 0.18);
+}
+.jot-combo .jot-input[aria-expanded="true"] + .jot-combo-open {
+    color: var(--joplin-url-color, #2D6BDC);
+    opacity: 1;
+}
 textarea.jot-input {
     /* Three lines, fixed: a draggable resize handle would make the centred dialog jump as it grows. */
     height: 64px;

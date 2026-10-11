@@ -92,11 +92,13 @@ interface Created {
     openLater: boolean
 }
 
-// The In this note row of one open: the buttons, their labels, the starting choice, and what the route needs to apply the choice.
+// The In this note row of one open: the buttons, their labels, the starting choice, the route's default (what a value the buttons do not offer
+// reads as: formModel.SELECTION_DEFAULT or TRIGGER_DEFAULT), and what the route needs to apply the choice.
 interface InThisNote {
     choices: string[]
     labels: { [choice: string]: string }
     value: string
+    fallback: string
     selection: string | null
     trigger: string | null
 }
@@ -196,22 +198,24 @@ async function withFormOpen<T>(work: () => Promise<T>): Promise<T | null> {
 }
 
 /** inThisNoteFor ***********************************************************************************************************************************
- * The In this note row of one open. The selection route: Keep, Replace (and Add after in the Markdown editor), starting on lastSelectionAction. The  *
- * trigger route: Remove and Replace with a link, labelled with the trigger, starting on lastTriggerAction. Every other route: no row, and nothing is  *
- * read.                                                                                                                                            *
+ * The In this note row of one open. The selection route: Keep, Replace (and Add after in the Markdown editor), starting on lastSelectionAction,    *
+ * else on Replace. The trigger route: Remove and Replace with a link, labelled with the trigger, starting on lastTriggerAction, else on Remove.      *
+ * Every other route: no row, and nothing is read.                                                                                                  *
  ***************************************************************************************************************************************************/
 async function inThisNoteFor(route: string, presets: FormPresets): Promise<InThisNote> {
     if (route === SELECTION_ROUTE && typeof presets.selection === "string"){
         const choices: string[] = FormModel.selectionChoices(await editorIsMarkdown())
-        const value = FormModel.inThisNoteAction(await getLastSelectionAction(), choices)
-        return { choices, labels: FormModel.SELECTION_LABELS, value, selection: presets.selection, trigger: null }
+        const fallback: string = FormModel.SELECTION_DEFAULT
+        const value = FormModel.inThisNoteAction(await getLastSelectionAction(), choices, fallback)
+        return { choices, labels: FormModel.SELECTION_LABELS, value, fallback, selection: presets.selection, trigger: null }
     }
     if (route === TRIGGER_ROUTE && typeof presets.trigger === "string"){
         const choices: string[] = FormModel.triggerChoices()
-        const value = FormModel.inThisNoteAction(await getLastTriggerAction(), choices)
-        return { choices, labels: FormModel.triggerLabels(presets.trigger), value, selection: null, trigger: presets.trigger }
+        const fallback: string = FormModel.TRIGGER_DEFAULT
+        const value = FormModel.inThisNoteAction(await getLastTriggerAction(), choices, fallback)
+        return { choices, labels: FormModel.triggerLabels(presets.trigger), value, fallback, selection: null, trigger: presets.trigger }
     }
-    return { choices: [], labels: {}, value: "", selection: null, trigger: null }
+    return { choices: [], labels: {}, value: "", fallback: "", selection: null, trigger: null }
 }
 
 async function runForm(route: string, presets: FormPresets): Promise<Created | null> {
@@ -243,10 +247,10 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
 
     for (;;){
         await joplin.views.dialogs.setHtml(handle, buildFormHtml({
-            notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen, inThisNoteChoices, inThisNoteLabels: row.labels,
+            notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen, inThisNoteChoices, inThisNoteLabels: row.labels, inThisNoteDefault: row.fallback,
         }))
         const result = await joplin.views.dialogs.open(handle)
-        const plan = FormModel.planCreate(result, { defaultType, dayStart, notebookId, inThisNoteChoices })
+        const plan = FormModel.planCreate(result, { defaultType, dayStart, notebookId, inThisNoteChoices, inThisNoteDefault: row.fallback })
         if (plan.kind === "none" || plan.kind === "nothing") return null
         if (plan.kind === "invalidDue"){
             // Refused: say why, then show the form again with everything as typed and the picker unfolded on the value that was refused.

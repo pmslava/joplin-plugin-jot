@@ -44,6 +44,10 @@
     var REMOVE = 'remove'
     var LINK = 'link'
     var CANCEL = 'cancel'
+    // The choice each route starts on when nothing usable is remembered (a fresh install, a value the form does not offer): Replace it with a link on
+    // the selection route, Remove ++ on the trigger route. The buttons keep their drawn order (keep, replace, after; remove, link) either way.
+    var SELECTION_DEFAULT = REPLACE
+    var TRIGGER_DEFAULT = REMOVE
     // The title Joplin shows for a note whose title is empty, used as the link's text so a link to such a note is never invisible.
     var UNTITLED = 'Untitled'
 
@@ -278,9 +282,10 @@
      *   { kind: 'create', note, tags, open }  the POST notes payload, the tag titles to attach, and whether to open the note (Create and open).         *
      * Create and open with both fields empty creates the empty note and opens it (Joplin's own New note, one step later). A note has no due date, so   *
      * its Due fields are neither read nor validated (switching to Note clears nothing in the form, but writes none of it). options: { defaultType,       *
-     * dayStart, notebookId, inThisNoteChoices } - the type a result without one reads as, the day start time, the notebook used when the form sent none,*
-     * and the In this note choices the form offered (the selection and trigger routes). The plan's inThisNote is the choice to apply, one of those      *
-     * offered (anything else reads as the first offered), or null on a route that offered none.                                                          *
+     * dayStart, notebookId, inThisNoteChoices, inThisNoteDefault } - the type a result without one reads as, the day start time, the notebook used when*
+     * the form sent none, the In this note choices the form offered (the selection and trigger routes) and the route's default choice. The plan's      *
+     * inThisNote is the choice to apply, one of those offered (anything else reads as the route's default, inThisNoteAction), or null on a route that   *
+     * offered none.                                                                                                                                      *
      ***************************************************************************************************************************************************/
     function planCreate(result, options){
         var settings = options || {}
@@ -297,7 +302,7 @@
             kind: 'create',
             values: values,
             open: action === 'createAndOpen',
-            inThisNote: choices.length ? inThisNoteAction(values.inThisNote, choices) : null,
+            inThisNote: choices.length ? inThisNoteAction(values.inThisNote, choices, settings.inThisNoteDefault) : null,
             note: {
                 parent_id: values.notebookId || text(settings.notebookId),
                 is_todo: isTodo ? 1 : 0,
@@ -323,17 +328,19 @@
     /** selectionChoices / inThisNoteAction **************************************************************************************************************
      * The In this note buttons the selection route offers: Keep, Replace and Add after in the Markdown editor; Keep and Replace in the Rich Text editor,*
      * where the selection comes back as plain text and writing it back would lose its formatting. inThisNoteAction is the choice that holds among the   *
-     * buttons offered, on either route: the value when it is one of them, otherwise the first offered (keep on the selection route, remove on the       *
-     * trigger route). It is the form's default (from the choice remembered last time) and what a create applies. selectionAction is its first name.    *
+     * buttons offered, on either route: the value when it is one of them, otherwise the route's default `fallback` when offered (SELECTION_DEFAULT,    *
+     * replace; TRIGGER_DEFAULT, remove), otherwise the first offered. It is the form's default (from the choice remembered last time) and what a create *
+     * applies. selectionAction is its first name.                                                                                                      *
      ***************************************************************************************************************************************************/
     function selectionChoices(markdownEditor){
         return markdownEditor ? [KEEP, REPLACE, AFTER] : [KEEP, REPLACE]
     }
 
-    function inThisNoteAction(value, choices){
+    function inThisNoteAction(value, choices, fallback){
         var list = Array.isArray(choices) ? choices : []
         if (list.indexOf(value) >= 0) return value
-        return list.length ? list[0] : KEEP
+        if (list.indexOf(fallback) >= 0) return fallback
+        return list.length ? list[0] : ''
     }
 
     /** triggerChoices / triggerLabels / triggerAnswer ***************************************************************************************************
@@ -483,6 +490,23 @@
         return exact >= 0 ? exact : 0
     }
 
+    // The Notebook list opened in full (the field focused or clicked, its chevron, an arrow key while the field shows the picked path): every
+    // notebook in path order, the picked one highlighted (the glue scrolls it into view); the first when the picked id is not among them.
+    function notebookListAll(notebooks, pickedId){
+        var rows = Array.isArray(notebooks) ? notebooks.slice() : []
+        var highlight = rows.length ? 0 : -1
+        for (var index = 0; index < rows.length; index++) if (rows[index].id === pickedId){ highlight = index; break }
+        return { rows: rows, highlight: highlight }
+    }
+
+    // The Tags list the field's focus opens: every tag while the field is empty, with none highlighted, so Enter still creates and the arrow keys
+    // enter the list; nothing once a tag is typed (the list then opens as one types, narrowed, since the whole list can be long).
+    function tagListOnFocus(tags, csv){
+        if (text(csv).trim()) return { rows: [], highlight: -1 }
+        var rows = (Array.isArray(tags) ? tags : []).filter(function(title){ return !!text(title) })
+        return { rows: rows, highlight: -1 }
+    }
+
     // Whether leaving a field while its list is open (a click on Create, on another field) takes the highlighted row first, as Tab does in the
     // Notebook field. `list` is { highlight, count, typed, moved }: moved is whether the user went to that row with the arrow keys.
     //   Notebook: when a filter is typed, or the user moved to the row. The typed text is only a filter and would be undone on leaving, so a click on
@@ -510,6 +534,8 @@
         REMOVE: REMOVE,
         LINK: LINK,
         CANCEL: CANCEL,
+        SELECTION_DEFAULT: SELECTION_DEFAULT,
+        TRIGGER_DEFAULT: TRIGGER_DEFAULT,
         normalizeType: normalizeType,
         headingFor: headingFor,
         dialogAction: dialogAction,
@@ -543,6 +569,8 @@
         moveHighlight: moveHighlight,
         suggestionHighlight: suggestionHighlight,
         notebookHighlight: notebookHighlight,
+        notebookListAll: notebookListAll,
+        tagListOnFocus: tagListOnFocus,
         pickOnLeave: pickOnLeave,
     }
 })

@@ -30,8 +30,9 @@ export const TYPE_TODO = "todo"
 export const TYPE_NOTE = "note"
 export const OPEN_IN_EDITOR = "editor"
 export const OPEN_IN_WINDOW = "window"
-// The In this note choices (formModel's KEEP, REPLACE, AFTER); keep is the default until the user picks another.
-export const SELECTION_KEEP = "keep"
+// The In this note choices (formModel's KEEP, REPLACE, AFTER); replace is the default until the user picks another (formModel.SELECTION_DEFAULT).
+// An install that already remembers another choice keeps it.
+export const SELECTION_REPLACE = "replace"
 // The trigger route's choices (formModel's REMOVE, LINK); remove is the default until the user picks another.
 export const TRIGGER_REMOVE = "remove"
 // The trigger's default (triggerRule's DEFAULT_TRIGGER).
@@ -101,7 +102,7 @@ export async function setupSettings(){
         },
         [LAST_SELECTION_ACTION_KEY]: {
             label: "In this note, the choice made last time (selection)",
-            value: SELECTION_KEEP,
+            value: SELECTION_REPLACE,
             type: SettingItemType.String,
             public: false,
             section: SECTION,
@@ -149,14 +150,14 @@ export async function isToolbarButtonEnabled(){
 /** getLastSelectionAction / setLastSelectionAction *************************************************************************************************
  * The In this note choice remembered from the last create on the selection route ("keep", "replace" or "after"), the form's default next time. The  *
  * read gives the raw value (formModel.selectionAction checks it against the buttons offered); both are guarded, since a memory that cannot be read  *
- * or written must never cost the user the note: the read falls back to keep, a failed write is a console warning.                                   *
+ * or written must never cost the user the note: the read falls back to replace, a failed write is a console warning.                                *
  ***************************************************************************************************************************************************/
 export async function getLastSelectionAction(){
     try {
-        return String((await joplin.settings.value(LAST_SELECTION_ACTION_KEY)) || SELECTION_KEEP)
+        return String((await joplin.settings.value(LAST_SELECTION_ACTION_KEY)) || SELECTION_REPLACE)
     } catch (error) {
         console.warn("Jot: could not read the In this note choice made last time", error)
-        return SELECTION_KEEP
+        return SELECTION_REPLACE
     }
 }
 
