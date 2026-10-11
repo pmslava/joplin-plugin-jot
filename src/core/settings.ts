@@ -1,7 +1,8 @@
 /** README ******************************************************************************************************************************************
- * Jot's settings, under Settings > Plugins > Jot (brief 4.6; every label and description is the brief's, word for word, section 5). Phase 1         *
- * registers the four the form and the toolbar button read. The typed trigger's setting comes with the content script (phase 3), and the hidden      *
- * per-device memories of the In this note control with that control (phase 2).                                                                    *
+ * Jot's settings, under Settings > Plugins > Jot (brief 4.6; every label and description is the brief's, word for word, section 5): the four the     *
+ * form and the toolbar button read, and the hidden per-device memory of the selection route's In this note choice (public: false, so it is never on *
+ * the Settings screen; a plugin's settings are not synced, so each device remembers its own). The typed trigger's setting and its memory come with   *
+ * the content script (phase 3).                                                                                                                    *
  *                                                                                                                                                  *
  * The keyboard shortcut is not a setting: the menu item carries an accelerator, so the command is listed under Options > Keyboard Shortcuts.        *
  ***************************************************************************************************************************************************/
@@ -16,11 +17,14 @@ export const DEFAULT_TYPE_KEY = "defaultType"
 export const OPEN_TARGET_KEY = "openTarget"
 export const DAY_START_TIME_KEY = "dayStartTime"
 export const SHOW_TOOLBAR_BUTTON_KEY = "showToolbarButton"
+export const LAST_SELECTION_ACTION_KEY = "lastSelectionAction"
 
 export const TYPE_TODO = "todo"
 export const TYPE_NOTE = "note"
 export const OPEN_IN_EDITOR = "editor"
 export const OPEN_IN_WINDOW = "window"
+// The In this note choices (formModel's KEEP, REPLACE, AFTER); keep is the default until the user picks another.
+export const SELECTION_KEEP = "keep"
 
 /** setupSettings ***********************************************************************************************************************************
  * Registers the section and its settings. Runs first in onStart, as the toolbar button's startup gate reads one of them.                           *
@@ -74,6 +78,13 @@ export async function setupSettings(){
             public: true,
             section: SECTION,
         },
+        [LAST_SELECTION_ACTION_KEY]: {
+            label: "In this note, the choice made last time (selection)",
+            value: SELECTION_KEEP,
+            type: SettingItemType.String,
+            public: false,
+            section: SECTION,
+        },
     })
 }
 
@@ -105,4 +116,26 @@ export async function getDayStartTime(){
  ***************************************************************************************************************************************************/
 export async function isToolbarButtonEnabled(){
     return (await joplin.settings.value(SHOW_TOOLBAR_BUTTON_KEY)) !== false
+}
+
+/** getLastSelectionAction / setLastSelectionAction *************************************************************************************************
+ * The In this note choice remembered from the last create on the selection route ("keep", "replace" or "after"), the form's default next time. The  *
+ * read gives the raw value (formModel.selectionAction checks it against the buttons offered); both are guarded, since a memory that cannot be read  *
+ * or written must never cost the user the note: the read falls back to keep, a failed write is a console warning.                                   *
+ ***************************************************************************************************************************************************/
+export async function getLastSelectionAction(){
+    try {
+        return String((await joplin.settings.value(LAST_SELECTION_ACTION_KEY)) || SELECTION_KEEP)
+    } catch (error) {
+        console.warn("Jot: could not read the In this note choice made last time", error)
+        return SELECTION_KEEP
+    }
+}
+
+export async function setLastSelectionAction(value: string){
+    try {
+        await joplin.settings.setValue(LAST_SELECTION_ACTION_KEY, value)
+    } catch (error) {
+        console.warn("Jot: could not remember the In this note choice", error)
+    }
 }

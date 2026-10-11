@@ -216,26 +216,36 @@ export function dataApiSettings(port: number, token: string): Record<string, unk
 export interface DataApi {
   /** GET a data API path (without the token), parsed as JSON; throws on a status other than 200. */
   get(apiPath: string): Promise<any>;
+  /** POST a JSON body to a data API path (without the token), the answer parsed as JSON; throws on a status other than 200. */
+  post(apiPath: string, body: unknown): Promise<any>;
   /** Resolves once the server answers /ping (it starts a moment after the window). */
   ready(win: Page): Promise<void>;
 }
 
 export function dataApi(port: number, token: string): DataApi {
-  const request = (apiPath: string): Promise<{ status: number; text: string }> =>
+  const request = (apiPath: string, method = 'GET', body?: unknown): Promise<{ status: number; text: string }> =>
     new Promise((resolve, reject) => {
-      const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: apiPath }, (response) => {
+      const payload = body === undefined ? undefined : JSON.stringify(body);
+      const headers = payload === undefined ? undefined : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) };
+      const req = http.request({ host: '127.0.0.1', port, method, path: apiPath, headers }, (response) => {
         let text = '';
         response.on('data', (chunk) => (text += chunk));
         response.on('end', () => resolve({ status: response.statusCode || 0, text }));
       });
       req.on('error', reject);
+      if (payload !== undefined) req.write(payload);
       req.end();
     });
+  const withToken = (apiPath: string) => `${apiPath}${apiPath.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
   return {
     async get(apiPath: string) {
-      const separator = apiPath.includes('?') ? '&' : '?';
-      const response = await request(`${apiPath}${separator}token=${encodeURIComponent(token)}`);
+      const response = await request(withToken(apiPath));
       if (response.status !== 200) throw new Error(`GET ${apiPath}: ${response.status} ${response.text}`);
+      return JSON.parse(response.text);
+    },
+    async post(apiPath: string, body: unknown) {
+      const response = await request(withToken(apiPath), 'POST', body);
+      if (response.status !== 200) throw new Error(`POST ${apiPath}: ${response.status} ${response.text}`);
       return JSON.parse(response.text);
     },
     async ready(win: Page) {

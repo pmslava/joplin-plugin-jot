@@ -1,8 +1,8 @@
 /** README ******************************************************************************************************************************************
  * The DOM glue of Jot's form dialog (brief 4.1, 4.2). The markup is the host's (formHtml.ts, written with dialogs.setHtml on every open); every     *
  * decision is formModel.js's (window.FormModel) and every quick-button date is alarmQuick.js's (window.AlarmQuick, copied from Cockpit). This file   *
- * wires them to the fields and keeps four things in step: the Type toggle and the heading, the suggestion lists of Notebook and Tags, the Due row,  *
- * and the picker folded behind the bell (Cockpit's alarmWebview.js, ported, single to-do).                                                         *
+ * wires them to the fields and keeps five things in step: the Type toggle and the heading, the suggestion lists of Notebook and Tags, the Due row,  *
+ * the picker folded behind the bell (Cockpit's alarmWebview.js, ported, single to-do), and on the selection route the In this note choice.         *
  *                                                                                                                                                  *
  * WHY A MutationObserver. setHtml writes new markup into a document whose scripts have already run, and does not run them again; a reopened dialog   *
  * may also be a fresh document where this file runs after the markup. So the form is wired whenever a form appears that is not wired yet (a marker  *
@@ -19,8 +19,9 @@
  ***************************************************************************************************************************************************/
 
 /** State of the current open **********************************************************************************************************************/
-// The island of the current open: { notebooks: [{id, path}], tags: [title], defaults: { type, notebookId, dayStart }, pickerOpen }.
-var jotData = { notebooks: [], tags: [], defaults: {}, pickerOpen: false }
+// The island of the current open: { notebooks: [{id, path}], tags: [title], defaults: { type, notebookId, dayStart }, pickerOpen,
+// inThisNote: { choices, value } on the selection route, else null }.
+var jotData = { notebooks: [], tags: [], defaults: {}, pickerOpen: false, inThisNote: null }
 // The open suggestion list: { kind: 'notebook'|'tag', input, list, rows, highlight, token }, or null when none is open.
 var jotSuggest = null
 
@@ -59,6 +60,7 @@ function readJotData(){
         tags: Array.isArray(data.tags) ? data.tags : [],
         defaults: data.defaults || {},
         pickerOpen: !!data.pickerOpen,
+        inThisNote: data.inThisNote && Array.isArray(data.inThisNote.choices) ? data.inThisNote : null,
     }
 }
 
@@ -100,6 +102,52 @@ function onJotTypeKeyDown(event){
     setJotType(next)
     var option = jotForm().querySelector('.jot-type-option[data-type="' + next + '"]')
     if (option) option.focus()
+}
+
+/** In this note ***********************************************************************************************************************************
+ * The selection route only. The buttons the host drew (the island's inThisNote.choices: Keep the text, Replace it with a link to the new note, and   *
+ * in the Markdown editor Add a link after it) act as radios, as Type's do: one tab stop, the selected one; the arrow keys move the choice, wrapping   *
+ * at both ends. The hidden inThisNote carries it, so Create sends it and a refused Create reopens on it.                                           *
+ ***************************************************************************************************************************************************/
+function jotChoiceOptions(){
+    var form = jotForm()
+    return form ? form.querySelectorAll('.jot-choice-option') : []
+}
+
+function setJotInThisNote(choice){
+    var input = jotById('jotInThisNote')
+    if (!input) return
+    var options = jotChoiceOptions()
+    var known = false
+    for (var index = 0; index < options.length; index++) if (options[index].getAttribute('data-choice') === choice) known = true
+    var value = known ? choice : model().KEEP
+    input.value = value
+    for (var row = 0; row < options.length; row++){
+        var selected = options[row].getAttribute('data-choice') === value
+        options[row].classList.toggle('-selected', selected)
+        options[row].setAttribute('aria-checked', selected ? 'true' : 'false')
+        options[row].setAttribute('tabindex', selected ? '0' : '-1')
+    }
+}
+
+function onJotChoiceClick(event){
+    var option = event.target && event.target.closest ? event.target.closest('.jot-choice-option') : null
+    if (!option) return
+    setJotInThisNote(option.getAttribute('data-choice'))
+    option.focus()
+}
+
+function onJotChoiceKeyDown(event){
+    var delta = (event.key === 'ArrowDown' || event.key === 'ArrowRight') ? 1 : ((event.key === 'ArrowUp' || event.key === 'ArrowLeft') ? -1 : 0)
+    if (!delta) return
+    event.preventDefault()
+    var options = jotChoiceOptions()
+    var current = -1
+    for (var index = 0; index < options.length; index++) if (options[index].getAttribute('data-choice') === jotById('jotInThisNote').value) current = index
+    var next = model().moveHighlight(options.length, current, delta)
+    if (next < 0) return
+    setJotInThisNote(options[next].getAttribute('data-choice'))
+    options[next].focus()
 }
 
 /** Due row ****************************************************************************************************************************************
@@ -658,6 +706,13 @@ function initJotFormIfNeeded(){
     for (var index = 0; index < lists.length; index++){
         lists[index].addEventListener('mousedown', onJotSuggestMouseDown)
         lists[index].addEventListener('click', onJotSuggestClick)
+    }
+
+    var choiceGroup = form.querySelector('.jot-choice')
+    if (choiceGroup){
+        choiceGroup.addEventListener('click', onJotChoiceClick)
+        choiceGroup.addEventListener('keydown', onJotChoiceKeyDown)
+        setJotInThisNote(jotById('jotInThisNote').value)
     }
 
     jotById('jotBell').addEventListener('click', onJotBellClick)

@@ -107,6 +107,41 @@ textarea.jot-input {
     outline-offset: -2px;
 }
 
+/* In this note (the selection route): the Type toggle's radios, stacked, since their labels are long. */
+.jot-choice {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-width: 0;
+    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
+    border-radius: 3px;
+    overflow: hidden;
+}
+.jot-choice-option {
+    padding: 3px 8px;
+    font-family: inherit;
+    font-size: inherit;
+    text-align: left;
+    color: inherit;
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+.jot-choice-option + .jot-choice-option {
+    border-top: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
+}
+.jot-choice-option:hover {
+    background-color: rgba(127, 127, 127, 0.18);
+}
+.jot-choice-option.-selected {
+    background-color: var(--joplin-selected-color, rgba(127, 127, 127, 0.35));
+    font-weight: 600;
+}
+.jot-choice-option:focus-visible {
+    outline: 1px solid var(--joplin-focus-outline-color, var(--joplin-url-color, #2D6BDC));
+    outline-offset: -2px;
+}
+
 /* Due: the date and time as text, the bell, the No date link. Greyed for a note. */
 .jot-due-text {
     flex: 1 1 auto;

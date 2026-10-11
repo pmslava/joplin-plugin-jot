@@ -1,6 +1,12 @@
 /** README ******************************************************************************************************************************************
  * The host side of Jot's form (brief 4.1 to 4.4): openForm(route, presets) gathers what the form shows, opens the dialog, and applies the answer.   *
- * Create mode only for now: no selection, no typed trigger, no edit mode (phases 2 to 4 add them behind the same function).                        *
+ * Create mode only for now: no typed trigger, no edit mode (phases 3 and 4 add them behind the same function).                                     *
+ *                                                                                                                                                  *
+ * THE SELECTION ROUTE. openJot(route) is what the three commands run: it reads the editor's selection first (editorSelection.ts) and, when there is  *
+ * one, opens the form on the 'selection' route, prefilled from it (formModel.splitSelection), with the In this note row; with none, the route it    *
+ * was given, the plain form. After a create on that route the choice is applied to the editor while it still holds the note the selection came    *
+ * from - after POST notes and the tags, BEFORE anything is opened (Create and open would switch the editor to the new note, and the edit would     *
+ * land there) - and remembered in lastSelectionAction for next time.                                                                               *
  *                                                                                                                                                  *
  * Every decision is formModel.js's (planCreate and the rules under it), so this file is the I/O around it: the notebooks and tags read from the     *
  * data API, the dialog, the POST notes, the tags (reused by lower-cased title, created when missing, attached), and the open after Create and open. *
@@ -17,12 +23,15 @@
 /** Imports *****************************************************************************************************************************************/
 import joplin from "api"
 import { buildFormHtml, FormNotebook, FormValues } from "./formHtml"
-import { getDayStartTime, getDefaultType, getOpenTarget, OPEN_IN_WINDOW } from "../core/settings"
+import { getDayStartTime, getDefaultType, getLastSelectionAction, getOpenTarget, OPEN_IN_WINDOW, setLastSelectionAction } from "../core/settings"
 import { isMobile } from "../core/platform"
+import { applySelectionEdit, editorIsMarkdown, readSelectedText } from "./editorSelection"
 const FormModel = require("./formModel")
 
 /** Constants ***************************************************************************************************************************************/
 export const FORM_DIALOG_ID = "jot.form"
+// The route of a form opened from highlighted text, whichever command opened it.
+export const SELECTION_ROUTE = "selection"
 export const FORM_BUTTONS = [
     { id: "ok", title: "Create" },
     { id: "openAfter", title: "Create and open" },
@@ -38,13 +47,14 @@ export const FORM_SCRIPTS = [
 ]
 
 /** Types *******************************************************************************************************************************************/
-// What a route or a caller can preset. Phase 1's routes preset nothing; the selection route (title, body) and other plugins (type, notebookId,
-// title, body) come later, through the same function.
+// What a route or a caller can preset. The selection route presets the title and body split from the selection, and carries the selection itself
+// (Add a link after it writes it back); other plugins (type, notebookId, title, body) come in phase 4, through the same function.
 export interface FormPresets {
     type?: string
     title?: string
     body?: string
     notebookId?: string
+    selection?: string
 }
 
 export interface FormOutcome {
@@ -79,10 +89,24 @@ async function buildFormDialog(): Promise<string> {
     return handle
 }
 
+/** openJot *****************************************************************************************************************************************
+ * What jot.open, jot.fromSelection and jot.button run (brief 4.4: one chord serves both). The selection is read first: highlighted text opens the    *
+ * form on the selection route, its first non-empty line as the Title and the rest as the Text; no selection (none, whitespace only, unreadable)     *
+ * opens the plain form on `route`. A form already open is left alone without reading anything.                                                    *
+ ***************************************************************************************************************************************************/
+export async function openJot(route: string): Promise<FormOutcome | null> {
+    if (formIsOpen) return null
+    const selection = await readSelectedText()
+    const split = FormModel.splitSelection(selection)
+    if (split.empty) return openForm(route)
+    return openForm(SELECTION_ROUTE, { title: split.title, body: split.body, selection })
+}
+
 /** openForm ****************************************************************************************************************************************
- * Opens the form and applies what the user chose. `route` names the way in ("menu" for Tools > Jot… and its shortcut, "button" for the toolbar);   *
- * create mode behaves the same for both today. Resolves { id, opened } when a note was created, null when nothing was (Cancel, Escape, an empty      *
- * Create, no notebook to create in, or a form already open).                                                                                        *
+ * Opens the form and applies what the user chose. `route` names the way in ("menu" for Tools > Jot… and its shortcut, "contextMenu" for the        *
+ * editor's right-click menu, "button" for the toolbar, all three the same plain form; "selection" for highlighted text, which adds the In this note  *
+ * row). Resolves { id, opened } when a note was created, null when nothing was (Cancel, Escape, an empty Create, no notebook to create in, or a     *
+ * form already open).                                                                                                                              *
  ***************************************************************************************************************************************************/
 export async function openForm(route: string, presets: FormPresets = {}): Promise<FormOutcome | null> {
     if (formIsOpen) return null
@@ -105,6 +129,10 @@ async function runForm(route: string, presets: FormPresets): Promise<FormOutcome
     const dayStart = FormModel.dayStartText(await getDayStartTime())
     const notebookId = await currentNotebookId(notebooks, presets.notebookId)
     const mobile = await isMobile()
+    // The selection route's In this note row: the buttons the editor allows, starting on the choice remembered from last time.
+    const selection = route === SELECTION_ROUTE && typeof presets.selection === "string" ? presets.selection : null
+    const inThisNoteChoices: string[] = selection === null ? [] : FormModel.selectionChoices(await editorIsMarkdown())
+    const inThisNote = inThisNoteChoices.length ? FormModel.selectionAction(await getLastSelectionAction(), inThisNoteChoices) : ""
 
     let values: FormValues = {
         type: defaultType,
@@ -114,14 +142,15 @@ async function runForm(route: string, presets: FormPresets): Promise<FormOutcome
         tags: "",
         dueDate: "",
         dueTime: "",
+        inThisNote: inThisNote,
     }
     let pickerOpen = false
     const handle = await getFormDialog()
 
     for (;;){
-        await joplin.views.dialogs.setHtml(handle, buildFormHtml({ notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen }))
+        await joplin.views.dialogs.setHtml(handle, buildFormHtml({ notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen, inThisNoteChoices }))
         const result = await joplin.views.dialogs.open(handle)
-        const plan = FormModel.planCreate(result, { defaultType, dayStart, notebookId })
+        const plan = FormModel.planCreate(result, { defaultType, dayStart, notebookId, inThisNoteChoices })
         if (plan.kind === "none" || plan.kind === "nothing") return null
         if (plan.kind === "invalidDue"){
             // Refused: say why, then show the form again with everything as typed and the picker unfolded on the value that was refused.
@@ -130,7 +159,7 @@ async function runForm(route: string, presets: FormPresets): Promise<FormOutcome
             pickerOpen = true
             continue
         }
-        return await createNote(plan)
+        return await createNote(plan, selection)
     }
 }
 
@@ -167,11 +196,18 @@ async function selectedFolder(): Promise<any> {
 }
 
 /** createNote **************************************************************************************************************************************
- * Executes a 'create' plan: POST notes with the payload formModel built, the tags, then the open when the plan asks for one.                       *
+ * Executes a 'create' plan: POST notes with the payload formModel built, the tags, then (the selection route) the In this note edit with the link   *
+ * to the new note under its final title and the choice remembered, and last the open when the plan asks for one - last, because opening switches   *
+ * the editor to the new note and the edit must reach the note the selection came from.                                                            *
  ***************************************************************************************************************************************************/
-async function createNote(plan: any): Promise<FormOutcome> {
+async function createNote(plan: any, selection: string | null): Promise<FormOutcome> {
     const note = await joplin.data.post(["notes"], null, plan.note)
     if (plan.tags.length) await attachTags(note.id, plan.tags)
+    if (plan.inThisNote && selection !== null){
+        const link = FormModel.noteLink(plan.note.title, note.id)
+        await applySelectionEdit(FormModel.selectionEdit(plan.inThisNote, selection, link))
+        await setLastSelectionAction(plan.inThisNote)
+    }
     if (plan.open) await openCreatedNote(note.id)
     return { id: note.id, opened: !!plan.open }
 }

@@ -11,6 +11,11 @@
  * notebook id, day start time) - travels in a <script type="application/json"> element, with every "<" written as < so no value can close it.  *
  * setHtml writes the markup through innerHTML, so the element is never executed, only read.                                                         *
  *                                                                                                                                                  *
+ * THE IN THIS NOTE ROW (the selection route only, after the Due row and its picker): the buttons the host offers - Keep the text, Replace it with a *
+ * link to the new note, and in the Markdown editor Add a link after it - drawn as radios in the Type toggle's pattern, with the choice in a hidden    *
+ * inThisNote. The island carries the same list and the starting choice ({ choices, value }, null on every other route), so the markup and the        *
+ * island never disagree about what is offered.                                                                                                      *
+ *                                                                                                                                                  *
  * The picker section is Cockpit's set alarm dialog (src/ui/alarm/alarm.ts, openAlarmDialog), single to-do only: the YYYY-MM-DD and HH:MM inputs,   *
  * the two rows of quick buttons, the calendar and the two time columns, with the same ids and the same inline handlers, which formWebview.js        *
  * defines (ported from Cockpit's alarmWebview.js). Its inputs carry no name: the Due row's hidden dueDate and dueTime are the values the form sends. *
@@ -27,6 +32,8 @@ export interface FormValues {
     tags: string
     dueDate: string
     dueTime: string
+    // The In this note choice ("keep", "replace", "after"); "" on a route without the row.
+    inThisNote: string
 }
 
 export interface FormView {
@@ -36,6 +43,8 @@ export interface FormView {
     dayStart: string
     mobile: boolean
     pickerOpen: boolean
+    // The In this note buttons to draw, in order (formModel.selectionChoices); empty or absent: no row.
+    inThisNoteChoices?: string[]
 }
 
 /** Imports *****************************************************************************************************************************************/
@@ -76,11 +85,14 @@ export function buildFormHtml(view: FormView): string {
     const isNote = type === FormModel.NOTE
     const notebook = view.notebooks.find(item => item.id === values.notebookId)
     const hasDue = !!(String(values.dueDate || "").trim() || String(values.dueTime || "").trim())
+    const choices: string[] = Array.isArray(view.inThisNoteChoices) ? view.inThisNoteChoices : []
+    const choice = choices.length ? FormModel.selectionAction(values.inThisNote, choices) : ""
     const island = islandJson({
         notebooks: view.notebooks.map(item => ({ id: item.id, path: item.path })),
         tags: view.tags,
         defaults: { type: type, notebookId: values.notebookId, dayStart: view.dayStart },
         pickerOpen: !!view.pickerOpen,
+        inThisNote: choices.length ? { choices: choices, value: choice } : null,
     })
     // A hidden marker on mobile only, as Cockpit's #cockpitPlatform: the script mirrors it onto #joplin-plugin-content as the jot-mobile class,
     // which the narrow layout in form.css is gated on (never a viewport @media query, which would also match Joplin's measuring pass).
@@ -90,6 +102,19 @@ export function buildFormHtml(view: FormView): string {
         return `<button type="button" class="jot-type-option${selected ? " -selected" : ""}" data-type="${value}" role="radio"`
             + ` aria-checked="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}">${label}</button>`
     }
+    const choiceOption = (value: string) => {
+        const selected = value === choice
+        return `<button type="button" class="jot-choice-option${selected ? " -selected" : ""}" data-choice="${escapeHtml(value)}" role="radio"`
+            + ` aria-checked="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}">${escapeHtml(FormModel.SELECTION_LABELS[value] || value)}</button>`
+    }
+    const inThisNoteRow = !choices.length ? "" : `
+            <div class="jot-row jot-row-top" id="jotInThisNoteRow">
+                <span class="jot-label" id="jotInThisNoteLabel">In this note</span>
+                <div class="jot-choice" role="radiogroup" aria-labelledby="jotInThisNoteLabel">
+                    ${choices.map(choiceOption).join("")}
+                </div>
+                <input type="hidden" name="inThisNote" id="jotInThisNote" value="${escapeHtml(choice)}">
+            </div>`
     const textInput = 'autocomplete="off" autocorrect="off" autocapitalize="off"'
     // The textarea's content starts with a newline because the HTML parser drops one there: a Text that itself starts with an empty line keeps it.
 
@@ -162,7 +187,7 @@ export function buildFormHtml(view: FormView): string {
                         <div class="alarm-time-col"><div class="alarm-time-scroll" id="alarmMinuteCol"></div></div>
                     </div>
                 </div>
-            </div>
+            </div>${inThisNoteRow}
             <div id="jotNotebookList" class="jot-suggest" role="listbox" aria-label="Notebooks" hidden></div>
             <div id="jotTagList" class="jot-suggest" role="listbox" aria-label="Tags" hidden></div>
         </form>

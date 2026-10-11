@@ -1,4 +1,4 @@
-// Jot harness (phase 1).
+// Jot harness (phases 1 and 2).
 //
 // Runner and assertion frame follow joplin-plugin-cockpit's test/run.js: a tiny homemade runner over
 // Node's assert, a failures counter, a final "All checks passed" / "N failing check(s)" line, and
@@ -9,8 +9,9 @@
 // content script kept free of a bundled CodeMirror, the form dialog's five files), the compiled bundle
 // driven against a stubbed `joplin` on desktop and mobile (the commands, the menu item, the settings, the
 // toolbar gate, and the form's host handler: the dialog, its markup, the POST payloads, the tags, the
-// opens), every rule of the pure src/form/formModel.js, the copies from Cockpit, the dialog glue's shape,
-// and the sandbox proxy rule over every source file.
+// opens; the selection route: the prefill, the In this note row and its memory, the edit in the editor and
+// its place in the call order), every rule of the pure src/form/formModel.js, the copies from Cockpit, the
+// dialog glue's shape, and the sandbox proxy rule over every source file.
 
 const assert = require('assert')
 const fs = require('fs')
@@ -51,13 +52,22 @@ async function check(name, fn) {
 //   selectedNote, selectedFolder what joplin.workspace answers
 //   dialogResults                what dialogs.open answers, in order (then Cancel); openDialog overrides it
 //   executeThrows                command names whose commands.execute rejects
+//   executeResults               what commands.execute answers, by command name (a function is called with the args);
+//                                anything not listed answers undefined, so selectedText reads as no selection by default
+//   globalSettings               what joplin.settings.globalValue() answers (editor.codeView is true, the Markdown
+//                                editor, unless given); globalValueThrows makes every globalValue reject
+// Besides the per-kind records, `timeline` lists the plugin's writes and commands in the order they were made
+// ("POST notes", "POST tags/<id>/notes", "execute insertText", "setValue lastSelectionAction=replace", ...), so
+// a check can pin the order of the create, the tags, the edit in the editor and the open.
 function makeJoplin(options) {
     const state = {
         onStart: null, commands: [], menuItems: [], toolbarButtons: [], messageBoxes: [], warnings: [],
-        sections: [], settingSpecs: {},
+        sections: [], settingSpecs: {}, settingWrites: [], globalReads: [],
         dialogCreates: [], dialogScripts: [], dialogButtons: [], dialogHtml: [], dialogOpens: 0,
-        dataGets: [], dataPosts: [], executes: [], workspaceCalls: [],
+        dataGets: [], dataPosts: [], executes: [], workspaceCalls: [], timeline: [],
     }
+    const written = {}
+    const globals = { 'editor.codeView': true, ...(options.globalSettings || {}) }
     let nextId = 1
     const newId = (prefix) => `${prefix}${String(nextId++).padStart(4, '0')}`
     const pageSize = options.pageSize || 2
@@ -78,16 +88,30 @@ function makeJoplin(options) {
             registerSection: async (name, spec) => { state.sections.push({ name, spec }) },
             registerSettings: async (specs) => { Object.assign(state.settingSpecs, specs) },
             value: async (key) => {
+                if (key in written) return written[key]
                 if (options.settings && key in options.settings) return options.settings[key]
                 return state.settingSpecs[key] ? state.settingSpecs[key].value : undefined
+            },
+            setValue: async (key, value) => {
+                state.settingWrites.push({ key, value })
+                state.timeline.push(`setValue ${key}=${value}`)
+                written[key] = value
+            },
+            globalValue: async (key) => {
+                state.globalReads.push(key)
+                if (options.globalValueThrows) throw new Error(`cannot read ${key}`)
+                return globals[key]
             },
         },
         commands: {
             register: async (command) => { state.commands.push(command) },
             execute: async (name, ...args) => {
                 state.executes.push({ name, args })
+                state.timeline.push(`execute ${name}`)
                 if (options.executeThrows && options.executeThrows.includes(name)) throw new Error(`Command not found: ${name}`)
-                return undefined
+                const results = options.executeResults || {}
+                if (!(name in results)) return undefined
+                return typeof results[name] === 'function' ? results[name](...args) : results[name]
             },
         },
         workspace: {
@@ -103,6 +127,7 @@ function makeJoplin(options) {
             },
             post: async (pathParts, query, body) => {
                 state.dataPosts.push({ path: pathParts, query, body })
+                state.timeline.push(`POST ${pathParts.join('/')}`)
                 if (pathParts.length === 1 && pathParts[0] === 'notes') return { id: newId('note'), ...body }
                 if (pathParts.length === 1 && pathParts[0] === 'tags') {
                     const tag = { id: newId('tag'), title: body.title }
@@ -203,6 +228,24 @@ async function openFormWith(options) {
     return { state, outcome }
 }
 
+// The selection read every command makes before it opens the form (the plain route included).
+const READ_SELECTION = { name: 'selectedText', args: [] }
+
+// Starts a bundle with the form fixtures, `selection` as what the editor's selectedText answers, and `options`, runs `command` (jot.fromSelection
+// unless given) once, and returns the stub's record and what the command resolved.
+async function openSelectionWith(selection, options, command = 'jot.fromSelection') {
+    const executeResults = { ...((options && options.executeResults) || {}), selectedText: selection }
+    const state = await runBundle({ ...FORM_BASE, ...options, executeResults })
+    const registered = state.commands.find(item => item.name === command)
+    const outcome = await withWarnings(state, () => registered.execute())
+    return { state, outcome }
+}
+
+// The labels of the In this note buttons a form's markup draws, in order.
+function choiceLabels(html) {
+    return (html.match(/class="jot-choice-option[^"]*"[^>]*>([^<]*)<\/button>/g) || []).map(match => match.replace(/^[^>]*>/, '').replace(/<\/button>$/, ''))
+}
+
 // The JSON island of a form's markup, parsed.
 function islandOf(html) {
     const match = /<script type="application\/json" id="jotFormData">([\s\S]*?)<\/script>/.exec(html)
@@ -294,13 +337,15 @@ async function main() {
     // ---------------------------------------------------------------- the bundle against a stub
     const desktop = await runBundle({ versionInfo: DESKTOP })
 
-    await check('desktop: onStart registers jot.open, labelled Jot…, and jot.button, labelled Jot', () => {
-        assert.deepStrictEqual(desktop.commands.map(command => [command.name, command.label]), [['jot.open', 'Jot…'], ['jot.button', 'Jot']])
+    await check('desktop: onStart registers jot.open, labelled Jot…, jot.fromSelection, labelled Jot from the selection…, and jot.button, labelled Jot', () => {
+        assert.deepStrictEqual(desktop.commands.map(command => [command.name, command.label]),
+            [['jot.open', 'Jot…'], ['jot.fromSelection', 'Jot from the selection…'], ['jot.button', 'Jot']])
     })
 
-    await check('desktop: Tools > Jot… is one menu item with the Ctrl+Shift+J accelerator', () => {
+    await check('desktop: Tools > Jot… is one menu item with the Ctrl+Shift+J accelerator, and jot.fromSelection is in the editor\'s right-click menu', () => {
         assert.deepStrictEqual(desktop.menuItems, [
             { id: 'jot.open.menu', commandName: 'jot.open', location: 'tools', options: { accelerator: 'Ctrl+Shift+J' } },
+            { id: 'jot.fromSelection.menu', commandName: 'jot.fromSelection', location: 'editorContextMenu', options: undefined },
         ])
         assert.deepStrictEqual(desktop.warnings, [])
     })
@@ -310,35 +355,38 @@ async function main() {
         assert.strictEqual(state.dialogOpens, 1)
         assert.deepStrictEqual(state.messageBoxes, [])
         assert.deepStrictEqual(state.dataPosts, [])
-        assert.deepStrictEqual(state.executes, [])
+        assert.deepStrictEqual(state.executes, [READ_SELECTION], 'the selection is read first; nothing else is run')
         assert.strictEqual(outcome, null)
     })
 
     const mobile = await runBundle({ versionInfo: MOBILE })
 
     await check('mobile: the commands are registered and no menu item is made', () => {
-        assert.deepStrictEqual(mobile.commands.map(command => command.name), ['jot.open', 'jot.button'])
+        assert.deepStrictEqual(mobile.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button'])
         assert.deepStrictEqual(mobile.menuItems, [])
         assert.deepStrictEqual(mobile.warnings, [])
     })
 
     const refused = await runBundle({ versionInfo: DESKTOP, menuItemsThrow: true })
 
-    await check('an app that refuses the menu item still starts the plugin, with one console warning', () => {
-        assert.deepStrictEqual(refused.commands.map(command => command.name), ['jot.open', 'jot.button'])
-        assert.strictEqual(refused.warnings.length, 1)
+    await check('an app that refuses the menu items still starts the plugin, with one console warning for each item', () => {
+        assert.deepStrictEqual(refused.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button'])
+        assert.strictEqual(refused.warnings.length, 2)
         assert.ok(refused.warnings[0].startsWith('Jot: could not add Tools > Jot…'), refused.warnings[0])
+        assert.ok(refused.warnings[1].startsWith('Jot: could not add Jot from the selection… to the editor\'s right-click menu'), refused.warnings[1])
     })
 
     // ---------------------------------------------------------------- settings and the toolbar gate
-    await check('settings: section Jot with exactly defaultType, openTarget, dayStartTime and showToolbarButton, worded as the brief\'s 4.6 table', () => {
+    await check('settings: section Jot with exactly defaultType, openTarget, dayStartTime and showToolbarButton on screen, worded as the brief\'s 4.6 table, and the hidden lastSelectionAction', () => {
         assert.deepStrictEqual(desktop.sections.map(section => [section.name, section.spec.label]), [['jot', 'Jot']])
         const specs = desktop.settingSpecs
-        assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'openTarget', 'dayStartTime', 'showToolbarButton'])
+        assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'openTarget', 'dayStartTime', 'showToolbarButton', 'lastSelectionAction'])
         for (const key of Object.keys(specs)) {
             assert.strictEqual(specs[key].section, 'jot', `${key} is in the Jot section`)
-            assert.strictEqual(specs[key].public, true, `${key} is public`)
+            assert.strictEqual(specs[key].public, key !== 'lastSelectionAction', `${key} is ${key === 'lastSelectionAction' ? 'hidden' : 'public'}`)
         }
+        assert.deepStrictEqual([specs.lastSelectionAction.value, specs.lastSelectionAction.type, specs.lastSelectionAction.isEnum], ['keep', 2, undefined],
+            'a per-device string, keep until the user picks another')
         const STRING = 2, BOOL = 3
         assert.deepStrictEqual(
             { label: specs.defaultType.label, description: specs.defaultType.description, value: specs.defaultType.value, type: specs.defaultType.type, isEnum: specs.defaultType.isEnum, options: specs.defaultType.options },
@@ -361,10 +409,10 @@ async function main() {
         assert.deepStrictEqual(mobile.toolbarButtons, button)
     })
 
-    await check('toolbar gate: with showToolbarButton off no button is made, and both commands are still registered', async () => {
+    await check('toolbar gate: with showToolbarButton off no button is made, and the three commands are still registered', async () => {
         const off = await runBundle({ versionInfo: DESKTOP, settings: { showToolbarButton: false } })
         assert.deepStrictEqual(off.toolbarButtons, [])
-        assert.deepStrictEqual(off.commands.map(command => command.name), ['jot.open', 'jot.button'])
+        assert.deepStrictEqual(off.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button'])
         const offMobile = await runBundle({ versionInfo: MOBILE, settings: { showToolbarButton: false } })
         assert.deepStrictEqual(offMobile.toolbarButtons, [])
     })
@@ -508,7 +556,7 @@ async function main() {
             { path: ['tags'], query: null, body: { title: 'new one' } },
             { path: ['tags', 'tag0002', 'notes'], query: null, body: { id: noteId } },
         ])
-        assert.deepStrictEqual(state.executes, [], 'Create runs no command: no open, no focus move')
+        assert.deepStrictEqual(state.executes, [READ_SELECTION], 'Create runs no command after the selection read: no open, no focus move, no edit')
         assert.deepStrictEqual(state.messageBoxes, [])
     })
 
@@ -520,7 +568,7 @@ async function main() {
             { path: ['notes'], query: null, body: { parent_id: 'fProj', is_todo: 0, title: 'A thought', body: 'line one\nline two', todo_due: 0 } },
         ])
         assert.deepStrictEqual(state.messageBoxes, [])
-        assert.deepStrictEqual(state.executes, [])
+        assert.deepStrictEqual(state.executes, [READ_SELECTION])
         assert.strictEqual(outcome.opened, false)
     })
 
@@ -536,42 +584,42 @@ async function main() {
 
     await check('Create and open: opens the new note in the editor (openNote with its id)', async () => {
         const { state, outcome } = await openFormWith({ dialogResults: [formResult('openAfter', { title: 'Open me' })] })
-        assert.deepStrictEqual(state.executes, [{ name: 'openNote', args: [outcome.id] }])
+        assert.deepStrictEqual(state.executes, [READ_SELECTION, { name: 'openNote', args: [outcome.id] }])
         assert.deepStrictEqual(outcome, { id: outcome.id, opened: true })
     })
 
     await check('Create and open: with openTarget "In a new window" runs openNoteInNewWindow; when that throws, openNote with one console warning', async () => {
         const inWindow = await openFormWith({ settings: { openTarget: 'window' }, dialogResults: [formResult('openAfter', { title: 'Window' })] })
-        assert.deepStrictEqual(inWindow.state.executes, [{ name: 'openNoteInNewWindow', args: [inWindow.outcome.id] }])
+        assert.deepStrictEqual(inWindow.state.executes, [READ_SELECTION, { name: 'openNoteInNewWindow', args: [inWindow.outcome.id] }])
         assert.deepStrictEqual(inWindow.state.warnings, [])
         const fallback = await openFormWith({
             settings: { openTarget: 'window' }, executeThrows: ['openNoteInNewWindow'], dialogResults: [formResult('openAfter', { title: 'Old app' })],
         })
-        assert.deepStrictEqual(fallback.state.executes.map(call => call.name), ['openNoteInNewWindow', 'openNote'])
-        assert.deepStrictEqual(fallback.state.executes[1].args, [fallback.outcome.id])
+        assert.deepStrictEqual(fallback.state.executes.map(call => call.name), ['selectedText', 'openNoteInNewWindow', 'openNote'])
+        assert.deepStrictEqual(fallback.state.executes[2].args, [fallback.outcome.id])
         assert.strictEqual(fallback.state.warnings.length, 1)
         assert.ok(fallback.state.warnings[0].startsWith('Jot: could not open the note in a new window'), fallback.state.warnings[0])
         assert.deepStrictEqual(fallback.state.messageBoxes, [], 'silently: no message box')
         const onMobile = await openFormWith({ versionInfo: MOBILE, settings: { openTarget: 'window' }, dialogResults: [formResult('openAfter', { title: 'Phone' })] })
-        assert.deepStrictEqual(onMobile.state.executes.map(call => call.name), ['openNote'], 'mobile opens in the editor')
+        assert.deepStrictEqual(onMobile.state.executes.map(call => call.name), ['selectedText', 'openNote'], 'mobile opens in the editor')
     })
 
     await check('both empty: Create creates nothing and closes; Create and open creates the empty note and opens it', async () => {
         const create = await openFormWith({ dialogResults: [formResult('ok', { title: '', body: ' \n ', tags: 'work', dueDate: '2026-10-14' })] })
         assert.deepStrictEqual(create.state.dataPosts, [])
-        assert.deepStrictEqual(create.state.executes, [])
+        assert.deepStrictEqual(create.state.executes, [READ_SELECTION])
         assert.strictEqual(create.state.dialogOpens, 1, 'closed, not reopened')
         assert.strictEqual(create.outcome, null)
         const open = await openFormWith({ dialogResults: [formResult('openAfter', { title: '', body: '' })] })
         assert.deepStrictEqual(notePosts(open.state).map(post => post.body), [{ parent_id: 'fProj', is_todo: 1, title: '', body: '', todo_due: 0 }])
-        assert.deepStrictEqual(open.state.executes, [{ name: 'openNote', args: [open.outcome.id] }])
+        assert.deepStrictEqual(open.state.executes, [READ_SELECTION, { name: 'openNote', args: [open.outcome.id] }])
     })
 
     await check('Cancel (and Escape, any other button) writes nothing and opens nothing', async () => {
         for (const id of ['cancel', 'close', undefined]) {
             const { state, outcome } = await openFormWith({ dialogResults: [formResult(id, { title: 'Never' })] })
             assert.deepStrictEqual(state.dataPosts, [], `button ${id}`)
-            assert.deepStrictEqual(state.executes, [], `button ${id}`)
+            assert.deepStrictEqual(state.executes, [READ_SELECTION], `button ${id}`)
             assert.strictEqual(outcome, null)
         }
     })
@@ -604,6 +652,169 @@ async function main() {
         const unreadable = await openFormWith({ settings: { dayStartTime: 'soon' }, dialogResults: [formResult('ok', { title: 'Default', dueDate: '2026-10-20' })] })
         assert.strictEqual(islandOf(unreadable.state.dialogHtml[0]).data.defaults.dayStart, '09:00')
         assert.strictEqual(notePosts(unreadable.state)[0].body.todo_due, new Date(2026, 9, 20, 9, 0).getTime())
+    })
+
+    // ---------------------------------------------------------------- the selection route
+    await check('selection route: jot.fromSelection reads the selection and opens the form prefilled (first non-empty line the Title, the rest the Text), with In this note after Due', async () => {
+        const { state, outcome } = await openSelectionWith('\n  Buy milk  \n\nsemi-skimmed\n  2 litres')
+        assert.deepStrictEqual(state.executes, [READ_SELECTION], 'the selection is read before the form opens; Cancel runs nothing else')
+        assert.deepStrictEqual(state.globalReads, ['editor.codeView'], 'which editor is up is read once, for the buttons')
+        const html = state.dialogHtml[0]
+        assert.ok(/<input type="text" name="title"[^>]*value="Buy milk"/.test(html), 'the first non-empty line, trimmed, is the Title')
+        assert.ok(html.includes('>\nsemi-skimmed\n  2 litres</textarea>'), 'the lines after it, blank lines first dropped, are the Text as typed')
+        const order = ['id="jotDueRow"', 'id="jotPicker"', 'id="jotInThisNoteRow"', 'id="jotNotebookList"']
+        const positions = order.map(marker => html.indexOf(marker))
+        positions.forEach((position, index) => assert.ok(position >= 0, `${order[index]} is in the markup`))
+        assert.deepStrictEqual(positions.slice().sort((a, b) => a - b), positions, 'In this note comes after the Due row and its picker')
+        assert.ok(html.includes('<span class="jot-label" id="jotInThisNoteLabel">In this note</span>'))
+        assert.ok(/<div class="jot-choice" role="radiogroup" aria-labelledby="jotInThisNoteLabel">/.test(html))
+        assert.deepStrictEqual(choiceLabels(html), ['Keep the text', 'Replace it with a link to the new note', 'Add a link after it'])
+        assert.ok(/data-choice="keep" role="radio" aria-checked="true" tabindex="0">Keep the text</.test(html), 'keep is the default')
+        assert.ok(/<input type="hidden" name="inThisNote" id="jotInThisNote" value="keep">/.test(html))
+        for (const button of html.match(/<button\b[^>]*>/g) || []) assert.ok(button.includes('type="button"'), `every button is type="button": ${button}`)
+        assert.deepStrictEqual(islandOf(html).data.inThisNote, { choices: ['keep', 'replace', 'after'], value: 'keep' })
+        assert.strictEqual(outcome, null)
+        assert.deepStrictEqual([state.dataPosts, state.settingWrites], [[], []], 'Cancel writes nothing and remembers nothing')
+    })
+
+    await check('selection route: the In this note default is lastSelectionAction; the Rich Text editor (editor.codeView false, or unreadable) offers Keep and Replace only', async () => {
+        const remembered = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'replace' } })
+        assert.deepStrictEqual(islandOf(remembered.state.dialogHtml[0]).data.inThisNote, { choices: ['keep', 'replace', 'after'], value: 'replace' })
+        assert.ok(/data-choice="replace" role="radio" aria-checked="true" tabindex="0"/.test(remembered.state.dialogHtml[0]))
+        assert.ok(/name="inThisNote" id="jotInThisNote" value="replace"/.test(remembered.state.dialogHtml[0]))
+        const after = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'after' } })
+        assert.strictEqual(islandOf(after.state.dialogHtml[0]).data.inThisNote.value, 'after')
+        const richText = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'after' }, globalSettings: { 'editor.codeView': false } })
+        const richHtml = richText.state.dialogHtml[0]
+        assert.deepStrictEqual(islandOf(richHtml).data.inThisNote, { choices: ['keep', 'replace'], value: 'keep' }, 'a remembered "after" falls back to keep')
+        assert.deepStrictEqual(choiceLabels(richHtml), ['Keep the text', 'Replace it with a link to the new note'])
+        assert.ok(!richHtml.includes('Add a link after it'), 'Add a link after it is not offered in the Rich Text editor')
+        const richReplace = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'replace' }, globalSettings: { 'editor.codeView': false } })
+        assert.strictEqual(islandOf(richReplace.state.dialogHtml[0]).data.inThisNote.value, 'replace')
+        const unreadable = await openSelectionWith('Pay rent', { globalValueThrows: true })
+        assert.deepStrictEqual(islandOf(unreadable.state.dialogHtml[0]).data.inThisNote.choices, ['keep', 'replace'], 'an editor that cannot be told is treated as Rich Text')
+        assert.strictEqual(unreadable.state.warnings.length, 1)
+        assert.ok(unreadable.state.warnings[0].startsWith('Jot: could not tell which editor is open'), unreadable.state.warnings[0])
+        const forged = await openSelectionWith('Pay rent', {
+            globalSettings: { 'editor.codeView': false }, dialogResults: [formResult('ok', { title: 'Pay rent', inThisNote: 'after' })],
+        })
+        assert.deepStrictEqual(forged.state.timeline, ['execute selectedText', 'POST notes', 'setValue lastSelectionAction=keep'],
+            'an "after" the Rich Text form never offered is applied as keep: no edit')
+    })
+
+    await check('selection route, replace: POST notes, the tag calls, then insertText with [Title](:/id) under the final title; nothing opened; the choice remembered', async () => {
+        const { state, outcome } = await openSelectionWith('Call the bank\nabout the card', {
+            dialogResults: [formResult('ok', { title: ' Call the [bank] ', body: 'about the card', tags: 'work, new one', inThisNote: 'replace' })],
+        })
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: false })
+        assert.deepStrictEqual(state.timeline, [
+            'execute selectedText', 'POST notes', 'POST tags/tWork/notes', 'POST tags', 'POST tags/tag0002/notes',
+            'execute insertText', 'setValue lastSelectionAction=replace',
+        ])
+        assert.deepStrictEqual(state.executes[1], { name: 'insertText', args: [`[Call the \\[bank\\]](:/${outcome.id})`] }, 'the trimmed title, brackets escaped')
+        assert.deepStrictEqual(state.warnings, [])
+        const rich = await openSelectionWith('Call the bank', {
+            globalSettings: { 'editor.codeView': false }, dialogResults: [formResult('ok', { title: 'Call the bank', inThisNote: 'replace' })],
+        })
+        assert.deepStrictEqual(rich.state.executes.slice(1), [{ name: 'insertText', args: [`[Call the bank](:/${rich.outcome.id})`] }], 'insertText in the Rich Text editor too')
+    })
+
+    await check('selection route, after (Markdown editor): replaceSelection with the selection and the link, after a space for one line, on its own line for several; the open comes last', async () => {
+        const one = await openSelectionWith('Pay rent', { dialogResults: [formResult('ok', { title: 'Pay rent', inThisNote: 'after' })] })
+        assert.deepStrictEqual(one.state.executes.slice(1), [{ name: 'replaceSelection', args: [`Pay rent [Pay rent](:/${one.outcome.id})`] }])
+        const several = await openSelectionWith('Pay rent\nby Friday', {
+            dialogResults: [formResult('openAfter', { title: 'Rent', body: 'by Friday', tags: 'home', inThisNote: 'after' })],
+        })
+        assert.deepStrictEqual(several.state.timeline, [
+            'execute selectedText', 'POST notes', 'POST tags', 'POST tags/tag0002/notes',
+            'execute replaceSelection', 'setValue lastSelectionAction=after', 'execute openNote',
+        ], 'Create and open: the edit reaches the note the selection came from before the editor switches')
+        assert.deepStrictEqual(several.state.executes[1].args, [`Pay rent\nby Friday\n[Rent](:/${several.outcome.id})`])
+        assert.deepStrictEqual(several.state.executes[2], { name: 'openNote', args: [several.outcome.id] })
+        assert.deepStrictEqual(several.outcome, { id: several.outcome.id, opened: true })
+    })
+
+    await check('selection route, keep: no edit at all; Create and open opens the new note; replace with an empty Title links the title the empty-title rule gave', async () => {
+        const keep = await openSelectionWith('Idea\nmore', { dialogResults: [formResult('openAfter', { title: 'Idea', body: 'more', inThisNote: 'keep' })] })
+        assert.deepStrictEqual(keep.state.timeline, ['execute selectedText', 'POST notes', 'setValue lastSelectionAction=keep', 'execute openNote'])
+        assert.deepStrictEqual(keep.outcome, { id: keep.outcome.id, opened: true })
+        const missing = await openSelectionWith('Idea', { dialogResults: [formResult('ok', { title: 'Idea' })] })
+        assert.deepStrictEqual(missing.state.timeline, ['execute selectedText', 'POST notes', 'setValue lastSelectionAction=keep'], 'a result without the field is keep')
+        const emptied = await openSelectionWith('First\nrest', { dialogResults: [formResult('ok', { title: '  ', body: 'First line\nrest', inThisNote: 'replace' })] })
+        assert.strictEqual(notePosts(emptied.state)[0].body.title, 'First line')
+        assert.deepStrictEqual(emptied.state.executes[1].args, [`[First line](:/${emptied.outcome.id})`])
+    })
+
+    await check('lastSelectionAction is written after a create on the selection route only: not on the plain route, not on Cancel, not when nothing is created', async () => {
+        const plain = await openFormWith({ dialogResults: [formResult('ok', { title: 'Plain', inThisNote: 'replace' })] })
+        assert.deepStrictEqual(plain.state.settingWrites, [], 'the plain route remembers nothing')
+        assert.deepStrictEqual(plain.state.executes, [READ_SELECTION], 'and makes no edit, whatever the result carries')
+        assert.ok(!plain.state.dialogHtml[0].includes('jotInThisNote'), 'the plain form has no In this note row')
+        assert.strictEqual(islandOf(plain.state.dialogHtml[0]).data.inThisNote, null)
+        const cancelled = await openSelectionWith('Idea', { dialogResults: [formResult('cancel', { title: 'Idea', inThisNote: 'replace' })] })
+        assert.deepStrictEqual(cancelled.state.settingWrites, [])
+        const nothing = await openSelectionWith('Idea', { dialogResults: [formResult('ok', { title: '', body: '', inThisNote: 'replace' })] })
+        assert.deepStrictEqual([nothing.state.dataPosts, nothing.state.settingWrites, nothing.outcome], [[], [], null])
+        const created = await openSelectionWith('Idea', { dialogResults: [formResult('ok', { title: 'Idea', inThisNote: 'after' })] })
+        assert.deepStrictEqual(created.state.settingWrites, [{ key: 'lastSelectionAction', value: 'after' }])
+    })
+
+    await check('no selection: a throwing selectedText, a non-string, an empty or whitespace-only answer all open the plain form (no row, no editor read)', async () => {
+        const thrown = await openSelectionWith(undefined, { executeThrows: ['selectedText'], dialogResults: [formResult('ok', { title: 'Plain', inThisNote: 'replace' })] })
+        assert.ok(!thrown.state.dialogHtml[0].includes('jotInThisNoteRow'))
+        assert.strictEqual(islandOf(thrown.state.dialogHtml[0]).data.inThisNote, null)
+        assert.deepStrictEqual(thrown.state.globalReads, [], 'the editor is not asked about on the plain route')
+        assert.strictEqual(thrown.state.warnings.length, 1)
+        assert.ok(thrown.state.warnings[0].startsWith('Jot: could not read the editor\'s selection'), thrown.state.warnings[0])
+        assert.deepStrictEqual(thrown.state.timeline, ['execute selectedText', 'POST notes'], 'the note is created, with no edit and no memory')
+        assert.ok(/name="title"[^>]*value=""/.test(thrown.state.dialogHtml[0]), 'nothing prefilled')
+        for (const answer of [42, null, { text: 'x' }, '', '  \n\t ']) {
+            const { state } = await openSelectionWith(answer)
+            assert.ok(!state.dialogHtml[0].includes('jotInThisNoteRow'), `${JSON.stringify(answer)} is no selection`)
+            assert.deepStrictEqual(state.globalReads, [])
+            assert.deepStrictEqual(state.warnings, [])
+        }
+    })
+
+    await check('one chord serves both: jot.open and jot.button take the selection route when selectedText returns text; jot.fromSelection with none is the plain form', async () => {
+        for (const command of ['jot.open', 'jot.button']) {
+            const { state, outcome } = await openSelectionWith('Idea for later', {
+                settings: { lastSelectionAction: 'replace' }, dialogResults: [formResult('ok', { title: 'Idea for later', inThisNote: 'replace' })],
+            }, command)
+            assert.ok(/name="title"[^>]*value="Idea for later"/.test(state.dialogHtml[0]), `${command} prefills the Title`)
+            assert.ok(state.dialogHtml[0].includes('id="jotInThisNoteRow"'), `${command} shows In this note`)
+            assert.deepStrictEqual(state.executes.slice(1), [{ name: 'insertText', args: [`[Idea for later](:/${outcome.id})`] }])
+        }
+        const none = await openSelectionWith(undefined, {}, 'jot.fromSelection')
+        assert.ok(!none.state.dialogHtml[0].includes('jotInThisNoteRow'), 'no selection: the same form as jot.open')
+        assert.strictEqual(none.state.dialogOpens, 1)
+    })
+
+    await check('an edit that throws is a console warning: the note stays created, the choice is remembered, and Create and open still opens', async () => {
+        const { state, outcome } = await openSelectionWith('Idea', {
+            executeThrows: ['insertText'], dialogResults: [formResult('openAfter', { title: 'Idea', inThisNote: 'replace' })],
+        })
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: true })
+        assert.deepStrictEqual(state.timeline, ['execute selectedText', 'POST notes', 'execute insertText', 'setValue lastSelectionAction=replace', 'execute openNote'])
+        assert.strictEqual(state.warnings.length, 1)
+        assert.ok(state.warnings[0].startsWith('Jot: could not change the highlighted text (insertText)'), state.warnings[0])
+        assert.deepStrictEqual(state.messageBoxes, [])
+    })
+
+    await check('a refused Create on the selection route reopens with the In this note choice kept, the Title and Text as typed', async () => {
+        const { state, outcome } = await openSelectionWith('Pay rent\nflat', {
+            dialogResults: [
+                formResult('ok', { title: 'Pay rent', body: 'flat', inThisNote: 'after', dueDate: '2026-02-31', dueTime: '09:00' }),
+                formResult('ok', { title: 'Pay rent', body: 'flat', inThisNote: 'after', dueDate: '2026-02-28', dueTime: '09:00' }),
+            ],
+        })
+        assert.strictEqual(state.dialogOpens, 2)
+        const again = state.dialogHtml[1]
+        assert.ok(/data-choice="after" role="radio" aria-checked="true" tabindex="0"/.test(again), 'after is still the checked radio')
+        assert.ok(/name="inThisNote" id="jotInThisNote" value="after"/.test(again))
+        assert.deepStrictEqual(islandOf(again).data.inThisNote, { choices: ['keep', 'replace', 'after'], value: 'after' })
+        assert.deepStrictEqual(state.globalReads, ['editor.codeView'], 'the editor is asked once, not on the reopen')
+        assert.deepStrictEqual(state.executes.slice(1), [{ name: 'replaceSelection', args: [`Pay rent\nflat\n[Pay rent](:/${outcome.id})`] }])
     })
 
     // ---------------------------------------------------------------- the pure model
@@ -699,6 +910,48 @@ async function main() {
         assert.deepStrictEqual([todo.open, todo.tags, todo.note.todo_due], [false, ['a', 'b'], new Date(2026, 9, 14, 10, 30).getTime()])
     })
 
+    await check('formModel.splitSelection: one line; several lines; blank lines first; whitespace-only and non-strings are empty', () => {
+        assert.deepStrictEqual(FormModel.splitSelection('  Call the bank  '), { title: 'Call the bank', body: '', empty: false }, 'one line: the Title, no Text')
+        assert.deepStrictEqual(FormModel.splitSelection('Call the bank\nabout the card\n  and the PIN'), { title: 'Call the bank', body: 'about the card\n  and the PIN', empty: false })
+        assert.deepStrictEqual(FormModel.splitSelection('\n \n\tHead \n\n\nbody\n\nend\n'), { title: 'Head', body: 'body\n\nend\n', empty: false },
+            'blank lines before the first line and before the Text are dropped; the rest is kept as is')
+        assert.deepStrictEqual(FormModel.splitSelection('Head\r\n\r\nBody'), { title: 'Head', body: 'Body', empty: false })
+        for (const blank of ['', '   ', ' \n\t\n ', null, undefined, 42, {}]) {
+            assert.deepStrictEqual(FormModel.splitSelection(blank), { title: '', body: '', empty: true }, `${JSON.stringify(blank)} is no selection`)
+        }
+    })
+
+    await check('formModel: the In this note choices and labels, the remembered default, the link as Joplin\'s markdownTag, the edit for each choice, and planCreate\'s inThisNote', () => {
+        assert.deepStrictEqual(FormModel.SELECTION_LABELS, { keep: 'Keep the text', replace: 'Replace it with a link to the new note', after: 'Add a link after it' })
+        assert.deepStrictEqual(FormModel.selectionChoices(true), ['keep', 'replace', 'after'])
+        assert.deepStrictEqual(FormModel.selectionChoices(false), ['keep', 'replace'])
+        assert.strictEqual(FormModel.selectionAction('after', ['keep', 'replace', 'after']), 'after')
+        assert.strictEqual(FormModel.selectionAction('after', ['keep', 'replace']), 'keep')
+        for (const value of ['', 'bogus', undefined, null]) assert.strictEqual(FormModel.selectionAction(value, ['keep', 'replace', 'after']), 'keep')
+        const id = '0123456789abcdef0123456789abcdef'
+        assert.strictEqual(FormModel.noteLink('Call the bank', id), `[Call the bank](:/${id})`)
+        assert.strictEqual(FormModel.noteLink('a [b] c', id), `[a \\[b\\] c](:/${id})`)
+        assert.strictEqual(FormModel.noteLink('', id), `[Untitled](:/${id})`)
+        const link = '[T](:/x)'
+        assert.strictEqual(FormModel.selectionEdit('keep', 'text', link), null)
+        assert.deepStrictEqual(FormModel.selectionEdit('replace', 'one line', link), { command: 'insertText', text: link })
+        assert.deepStrictEqual(FormModel.selectionEdit('replace', 'two\nlines', link), { command: 'insertText', text: link })
+        assert.deepStrictEqual(FormModel.selectionEdit('replace', 'a whole line\n', link), { command: 'insertText', text: `${link}\n` }, 'a selected line break stays')
+        assert.deepStrictEqual(FormModel.selectionEdit('after', 'one line', link), { command: 'replaceSelection', text: `one line ${link}` })
+        assert.deepStrictEqual(FormModel.selectionEdit('after', 'two\nlines', link), { command: 'replaceSelection', text: `two\nlines\n${link}` })
+        assert.deepStrictEqual(FormModel.selectionEdit('after', 'a whole line\n', link), { command: 'replaceSelection', text: `a whole line ${link}\n` })
+        assert.deepStrictEqual(FormModel.selectionEdit('after', 'two\nlines\n', link), { command: 'replaceSelection', text: `two\nlines\n${link}\n` })
+        const options = { defaultType: 'todo', dayStart: '09:00', notebookId: 'fWork' }
+        assert.strictEqual(FormModel.readFormValues({ jot: { inThisNote: 'after' } }).inThisNote, 'after')
+        assert.strictEqual(FormModel.readFormValues({}).inThisNote, '')
+        assert.strictEqual(FormModel.planCreate(formResult('ok', { title: 't', inThisNote: 'after' }), options).inThisNote, null, 'no choices offered: nothing to apply')
+        assert.strictEqual(FormModel.planCreate(formResult('ok', { title: 't', inThisNote: 'after' }), { ...options, inThisNoteChoices: ['keep', 'replace', 'after'] }).inThisNote, 'after')
+        assert.strictEqual(FormModel.planCreate(formResult('ok', { title: 't', inThisNote: 'after' }), { ...options, inThisNoteChoices: ['keep', 'replace'] }).inThisNote, 'keep')
+        assert.strictEqual(FormModel.planCreate(formResult('ok', { title: 't' }), { ...options, inThisNoteChoices: ['keep', 'replace'] }).inThisNote, 'keep')
+        const refused = FormModel.planCreate(formResult('ok', { title: 't', dueTime: '10:00', inThisNote: 'replace' }), { ...options, inThisNoteChoices: ['keep', 'replace'] })
+        assert.deepStrictEqual([refused.kind, refused.values.inThisNote], ['invalidDue', 'replace'], 'a refused Create keeps the choice')
+    })
+
     await check('formModel suggestions: notebooks filtered by matchesFilter, the tag token around the caret, tags minus those present, the pick', () => {
         assert.deepStrictEqual(FormModel.notebookSuggestions(SORTED_NOTEBOOKS, 'WORK').map(n => n.id), ['fWork', 'fProj'])
         assert.deepStrictEqual(FormModel.notebookSuggestions(SORTED_NOTEBOOKS, ' ').length, 5, 'a blank filter keeps every notebook')
@@ -792,6 +1045,19 @@ async function main() {
         for (const gone of ['alarmIsMulti', 'describeAlarmPlan', 'applyAlarmPlan', 'onAlarmModeChanged']) assert.ok(!glue.includes(gone), `${gone} is not ported`)
     })
 
+    await check('dialog glue: the In this note radios are wired on their group (click, arrow keys wrapping through moveHighlight), write the hidden inThisNote, and fall back to keep', () => {
+        const glue = read('src/form/formWebview.js')
+        assert.ok(glue.includes("choiceGroup.addEventListener('click', onJotChoiceClick)") && glue.includes("choiceGroup.addEventListener('keydown', onJotChoiceKeyDown)"),
+            'the listeners sit on the radiogroup, only when the row is there')
+        const keys = glue.slice(glue.indexOf('function onJotChoiceKeyDown'), glue.indexOf('/** Due row'))
+        assert.ok(keys.includes('model().moveHighlight(options.length, current, delta)'), 'the arrow keys wrap through the offered buttons')
+        assert.ok(keys.includes('event.preventDefault()'), 'an arrow key does not scroll the dialog')
+        const setter = glue.slice(glue.indexOf('function setJotInThisNote'), glue.indexOf('function onJotChoiceClick'))
+        assert.ok(setter.includes('input.value = value') && setter.includes('model().KEEP'), 'the hidden input carries the choice; an unknown one is keep')
+        const css = read('src/form/form.css').replace(/\/\*[\s\S]*?\*\//g, '')
+        assert.ok(/\.jot-choice\s*\{[^}]*flex-direction:\s*column;/.test(css), 'the long labels are stacked')
+    })
+
     // ---------------------------------------------------------------- the sandbox proxy rule
     await check('sandbox proxy: no joplin.* member is ever read without being called in the same expression', () => {
         // Cockpit's audit, unchanged in substance. `joplin` is sandboxProxy(wrappedTarget): its handler.get pushes
@@ -807,7 +1073,7 @@ async function main() {
         }
         walk(path.join(ROOT, 'src'))
         assert.ok(files.length >= 3, 'the audit must actually have found the source tree')
-        for (const file of ['index.ts', 'core/settings.ts', 'form/form.ts', 'form/formHtml.ts', 'form/formModel.js', 'form/formWebview.js']) {
+        for (const file of ['index.ts', 'core/settings.ts', 'form/form.ts', 'form/formHtml.ts', 'form/formModel.js', 'form/formWebview.js', 'form/editorSelection.ts']) {
             assert.ok(files.includes(path.join(ROOT, 'src', file)), `the audit covers src/${file}`)
         }
 

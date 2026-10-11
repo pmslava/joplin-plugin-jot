@@ -5,7 +5,8 @@
  *                                                                                                                                                  *
  * What is here: the dialog result's dispatch (which button), the form values read back from formData, the empty-title rule, the tag csv, the date   *
  * and time validation (Cockpit's parseAlarmFields), the due timestamp, the day start time, the notebook paths and the notebook default order, the    *
- * create plan the host executes, and the small helpers the dialog's glue asks (the heading, the Due row text, the suggestion lists, the tag token).   *
+ * create plan the host executes, the selection route's rules (the title/text split, the In this note choices and their default, the link, the edit  *
+ * the host makes in the note), and the small helpers the dialog's glue asks (the heading, the Due row text, the suggestion lists, the tag token).    *
  *                                                                                                                                                  *
  * CROSS-SCRIPT GLOBALS. In the dialog, window.SearchTokens (searchTokens.js, the filter rule copied from Cockpit) may load before or after this file:*
  * addScript appends plain <script> elements, which run in the order they finish loading. So it is looked up per call (searchTokens below), never     *
@@ -27,6 +28,18 @@
     var NO_NOTEBOOK_MESSAGE = 'Jot: there is no notebook to create in.'
     var NO_DATE = 'No date'
     var DEFAULT_DAY_START = '09:00'
+
+    // The In this note choices of the selection route (brief 4.4), their labels (section 5, word for word) and the order they are shown in.
+    var KEEP = 'keep'
+    var REPLACE = 'replace'
+    var AFTER = 'after'
+    var SELECTION_LABELS = {
+        keep: 'Keep the text',
+        replace: 'Replace it with a link to the new note',
+        after: 'Add a link after it',
+    }
+    // The title Joplin shows for a note whose title is empty, used as the link's text so a link to such a note is never invisible.
+    var UNTITLED = 'Untitled'
 
     function text(value){ return value == null ? '' : String(value) }
     function pad2(value){ return String(value).padStart(2, '0') }
@@ -86,6 +99,7 @@
             tags: text(form.tags),
             dueDate: text(form.dueDate),
             dueTime: text(form.dueTime),
+            inThisNote: text(form.inThisNote),
         }
     }
 
@@ -252,7 +266,9 @@
      *   { kind: 'create', note, tags, open }  the POST notes payload, the tag titles to attach, and whether to open the note (Create and open).         *
      * Create and open with both fields empty creates the empty note and opens it (Joplin's own New note, one step later). A note has no due date, so   *
      * its Due fields are neither read nor validated (switching to Note clears nothing in the form, but writes none of it). options: { defaultType,       *
-     * dayStart, notebookId } - the type a result without one reads as, the day start time, and the notebook used when the form sent none.              *
+     * dayStart, notebookId, inThisNoteChoices } - the type a result without one reads as, the day start time, the notebook used when the form sent none,*
+     * and the In this note choices the form offered (the selection route only). The plan's inThisNote is the choice to apply, one of those offered      *
+     * (anything else reads as keep), or null on a route that offered none.                                                                               *
      ***************************************************************************************************************************************************/
     function planCreate(result, options){
         var settings = options || {}
@@ -264,10 +280,12 @@
         var isTodo = values.type === TODO
         var due = isTodo ? dueTimestamp(values.dueDate, values.dueTime, settings.dayStart) : 0
         if (due === null) return { kind: 'invalidDue', values: values }
+        var choices = Array.isArray(settings.inThisNoteChoices) ? settings.inThisNoteChoices : []
         return {
             kind: 'create',
             values: values,
             open: action === 'createAndOpen',
+            inThisNote: choices.length ? selectionAction(values.inThisNote, choices) : null,
             note: {
                 parent_id: values.notebookId || text(settings.notebookId),
                 is_todo: isTodo ? 1 : 0,
@@ -277,6 +295,60 @@
             },
             tags: parseTagCsv(values.tags),
         }
+    }
+
+    /** splitSelection **********************************************************************************************************************************
+     * The selection route's prefill (brief 4.4, open question 1): the selection's first non-empty line, trimmed, is the Title, and the lines after it,  *
+     * with the blank lines that lead them dropped, are the Text, as typed. The empty-title rule's split, applied to the selection. A selection that is   *
+     * not a string, is empty or holds only whitespace is `empty`: the host then takes the plain route, as if nothing were highlighted.                  *
+     ***************************************************************************************************************************************************/
+    function splitSelection(selection){
+        if (typeof selection !== 'string') return { title: '', body: '', empty: true }
+        var named = applyEmptyTitleRule('', selection)
+        return { title: named.title, body: named.body, empty: named.nothing }
+    }
+
+    /** selectionChoices / selectionAction ***************************************************************************************************************
+     * The In this note buttons the form offers: Keep, Replace and Add after in the Markdown editor; Keep and Replace in the Rich Text editor, where the   *
+     * selection comes back as plain text and writing it back would lose its formatting. selectionAction is the choice that holds among those offered:   *
+     * the value when it is one of them, otherwise keep. It is the form's default (from the choice remembered last time) and what a create applies.      *
+     ***************************************************************************************************************************************************/
+    function selectionChoices(markdownEditor){
+        return markdownEditor ? [KEEP, REPLACE, AFTER] : [KEEP, REPLACE]
+    }
+
+    function selectionAction(value, choices){
+        var list = Array.isArray(choices) ? choices : []
+        return list.indexOf(value) >= 0 ? value : KEEP
+    }
+
+    /** noteLink ****************************************************************************************************************************************
+     * The link to a note, as Joplin's own Note.markdownTag writes it: [Title](:/id), with "[" and "]" in the title escaped. An empty title is linked as  *
+     * "Untitled", the name Joplin shows for it, so the link never renders as nothing.                                                                    *
+     ***************************************************************************************************************************************************/
+    function noteLink(title, id){
+        var shown = text(title) || UNTITLED
+        return '[' + shown.replace(/(\[|\])/g, '\\$1') + '](:/' + text(id) + ')'
+    }
+
+    /** selectionEdit ***********************************************************************************************************************************
+     * The edit the host makes in the note the selection came from, after the new note exists: { command, text } for joplin.commands.execute, or null.   *
+     *   keep     null: the note is not touched.                                                                                                          *
+     *   replace  insertText with the link. In the Markdown editor insertText replaces the selection; in the Rich Text editor it renders the Markdown    *
+     *            and replaces the selection with the result (3.6.14).                                                                                    *
+     *   after    replaceSelection with the selection, then the link: after a space when the selection is one line, on a line of its own when it spans   *
+     *            several. The Markdown editor only (selectionChoices never offers it in the Rich Text editor, where replaceSelection takes HTML).        *
+     * A selection that ends with a line break (a triple-clicked line in CodeMirror ends at the next line's start) keeps that break after the link, so   *
+     * the text that followed the selection stays on its own line.                                                                                       *
+     ***************************************************************************************************************************************************/
+    function selectionEdit(action, selection, link){
+        var source = text(selection)
+        var trailing = /\r?\n$/.exec(source)
+        var lineBreak = trailing ? trailing[0] : ''
+        var core = source.slice(0, source.length - lineBreak.length)
+        if (action === REPLACE) return { command: 'insertText', text: link + lineBreak }
+        if (action === AFTER) return { command: 'replaceSelection', text: core + (/\n/.test(core) ? '\n' : ' ') + link + lineBreak }
+        return null
     }
 
     /** Suggestion lists ********************************************************************************************************************************
@@ -352,6 +424,10 @@
         NO_NOTEBOOK_MESSAGE: NO_NOTEBOOK_MESSAGE,
         NO_DATE: NO_DATE,
         DEFAULT_DAY_START: DEFAULT_DAY_START,
+        KEEP: KEEP,
+        REPLACE: REPLACE,
+        AFTER: AFTER,
+        SELECTION_LABELS: SELECTION_LABELS,
         normalizeType: normalizeType,
         headingFor: headingFor,
         dialogAction: dialogAction,
@@ -368,6 +444,11 @@
         buildNotebookPaths: buildNotebookPaths,
         defaultNotebookId: defaultNotebookId,
         planCreate: planCreate,
+        splitSelection: splitSelection,
+        selectionChoices: selectionChoices,
+        selectionAction: selectionAction,
+        noteLink: noteLink,
+        selectionEdit: selectionEdit,
         notebookSuggestions: notebookSuggestions,
         tagTokenAt: tagTokenAt,
         tagSuggestions: tagSuggestions,
