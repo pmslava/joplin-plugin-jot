@@ -1,4 +1,4 @@
-// Jot harness (phases 1 and 2).
+// Jot harness (phases 1 to 3).
 //
 // Runner and assertion frame follow joplin-plugin-cockpit's test/run.js: a tiny homemade runner over
 // Node's assert, a failures counter, a final "All checks passed" / "N failing check(s)" line, and
@@ -10,8 +10,10 @@
 // driven against a stubbed `joplin` on desktop and mobile (the commands, the menu item, the settings, the
 // toolbar gate, and the form's host handler: the dialog, its markup, the POST payloads, the tags, the
 // opens; the selection route: the prefill, the In this note row and its memory, the edit in the editor and
-// its place in the call order), every rule of the pure src/form/formModel.js, the copies from Cockpit, the
-// dialog glue's shape, and the sandbox proxy rule over every source file.
+// its place in the call order; the typed trigger: the content script's registration and the plugin's handler
+// of its messages), every rule of the pure src/form/formModel.js and src/form/triggerRule.js, the content
+// script itself run in Node against a real CodeMirror EditorState (a stand-in for the view: there is no DOM
+// here), the copies from Cockpit, the dialog glue's shape, and the sandbox proxy rule over every source file.
 
 const assert = require('assert')
 const fs = require('fs')
@@ -56,6 +58,9 @@ async function check(name, fn) {
 //                                anything not listed answers undefined, so selectedText reads as no selection by default
 //   globalSettings               what joplin.settings.globalValue() answers (editor.codeView is true, the Markdown
 //                                editor, unless given); globalValueThrows makes every globalValue reject
+//   contentScriptsThrow          joplin.contentScripts.register rejects, as an app without content scripts would
+// The content script's registration lands in state.contentScripts and its message handler in
+// state.contentScriptHandlers, by content script id.
 // Besides the per-kind records, `timeline` lists the plugin's writes and commands in the order they were made
 // ("POST notes", "POST tags/<id>/notes", "execute insertText", "setValue lastSelectionAction=replace", ...), so
 // a check can pin the order of the create, the tags, the edit in the editor and the open.
@@ -65,6 +70,7 @@ function makeJoplin(options) {
         sections: [], settingSpecs: {}, settingWrites: [], globalReads: [],
         dialogCreates: [], dialogScripts: [], dialogButtons: [], dialogHtml: [], dialogOpens: 0,
         dataGets: [], dataPosts: [], executes: [], workspaceCalls: [], timeline: [],
+        contentScripts: [], contentScriptHandlers: {},
     }
     const written = {}
     const globals = { 'editor.codeView': true, ...(options.globalSettings || {}) }
@@ -160,6 +166,13 @@ function makeJoplin(options) {
             toolbarButtons: {
                 create: async (id, commandName, location) => { state.toolbarButtons.push({ id, commandName, location }) },
             },
+        },
+        contentScripts: {
+            register: async (type, id, scriptPath) => {
+                if (options.contentScriptsThrow) throw new Error('content scripts are not available')
+                state.contentScripts.push({ type, id, path: scriptPath })
+            },
+            onMessage: async (id, callback) => { state.contentScriptHandlers[id] = callback },
         },
     }
     return { joplin, state }
@@ -257,6 +270,108 @@ function notePosts(state) {
     return state.dataPosts.filter(post => post.path.length === 1 && post.path[0] === 'notes')
 }
 
+// ------------------------------------------------------------------------------------------ the typed trigger
+const CONTENT_SCRIPT_ID = 'jot.trigger'
+
+// Starts a bundle with the form fixtures and `options`, and returns the stub's record and the content script's message handler.
+async function triggerHandlerWith(options) {
+    const state = await runBundle({ ...FORM_BASE, ...options })
+    const handler = state.contentScriptHandlers[CONTENT_SCRIPT_ID]
+    if (typeof handler !== 'function') throw new Error('no message handler for the content script')
+    return { state, handler: (message) => withWarnings(state, () => handler(message)) }
+}
+
+// Sends one { type: 'trigger' } message, as the content script does on a fire, and returns the stub's record and the answer.
+async function fireTriggerWith(options, trigger = '++') {
+    const { state, handler } = await triggerHandlerWith(options)
+    const answer = await handler({ type: 'trigger', from: 6, to: 6 + trigger.length, trigger })
+    return { state, handler, answer }
+}
+
+// ------------------------------------------------------------------------------------------ the content script in Node
+// dist/contentScript.js is the webpack build, a CommonJS module whose @codemirror/* requires resolve to node_modules here
+// (the same copies this file requires, so the facets are the same objects). There is no DOM in this harness, so the
+// EditorView is a stand-in: a real EditorState, dispatch() building real transactions with state.update(), the
+// update listeners of the state's EditorView.updateListener facet called with { view, state, startState, transactions },
+// and a `composing` flag. What the stand-in cannot show (the DOM, focus, CodeMirror's history) the e2e spec shows.
+const { EditorView: CMEditorView } = require('@codemirror/view')
+const { EditorState: CMEditorState, StateEffect: CMStateEffect } = require('@codemirror/state')
+
+function loadContentScript() {
+    const full = path.join(DIST, 'contentScript.js')
+    delete require.cache[require.resolve(full)]
+    return require(full).default
+}
+
+const tick = (ms = 5) => new Promise(resolve => setTimeout(resolve, ms))
+
+// A stand-in for the plugin side of postMessage: `config` answers { trigger } (a function of the attempt, or a value), `trigger`
+// waits for the test to answer it (answerTrigger), anything else answers null. Every message is recorded in posts.
+function makeContentContext(config = { trigger: '++' }) {
+    const posts = []
+    const waiting = []
+    let configAsks = 0
+    const context = {
+        pluginId: PLUGIN_ID,
+        contentScriptId: CONTENT_SCRIPT_ID,
+        postMessage: async (message) => {
+            posts.push(JSON.parse(JSON.stringify(message)))
+            if (message.type === 'config') return typeof config === 'function' ? config(++configAsks) : config
+            if (message.type === 'trigger') return new Promise(resolve => waiting.push(resolve))
+            return null
+        },
+    }
+    const answerTrigger = async (answer) => {
+        const resolve = waiting.shift()
+        if (!resolve) throw new Error('no trigger is waiting for an answer')
+        resolve(answer)
+        await tick()
+    }
+    return { context, posts, answerTrigger, waiting }
+}
+
+// Mounts the content script on a stand-in view holding `doc`, the caret at its end; waits for the first config answer.
+async function mountTrigger(doc = '', config) {
+    const { context, posts, answerTrigger, waiting } = makeContentContext(config)
+    const extensions = []
+    const view = {
+        composing: false,
+        state: null,
+        dispatch(...specs) { this.apply([this.state.update(...specs)]) },
+        apply(transactions) {
+            const startState = this.state
+            for (const tr of transactions) this.state = tr.state
+            const update = { view: this, state: this.state, startState, transactions }
+            for (const listener of this.state.facet(CMEditorView.updateListener)) listener(update)
+        },
+    }
+    const warnings = []
+    const realWarn = console.warn
+    console.warn = (...args) => { warnings.push(args.map(String).join(' ')) }
+    try {
+        loadContentScript()(context).plugin({ cm6: view, editor: view, addExtension: (extension) => extensions.push(extension) })
+    } finally {
+        console.warn = realWarn
+    }
+    view.state = CMEditorState.create({ doc, extensions, selection: { anchor: doc.length } })
+    await tick()
+    const type = (text, userEvent = 'input.type') => {
+        for (const character of text) {
+            const at = view.state.selection.main.head
+            view.dispatch({ changes: { from: at, insert: character }, selection: { anchor: at + character.length }, userEvent })
+        }
+    }
+    const text = () => view.state.doc.toString()
+    const triggers = () => posts.filter(post => post.type === 'trigger')
+    const configs = () => posts.filter(post => post.type === 'config')
+    // Runs `fn` with console.warn recorded into warnings.
+    const quietly = async (fn) => {
+        console.warn = (...args) => { warnings.push(args.map(String).join(' ')) }
+        try { return await fn() } finally { console.warn = realWarn }
+    }
+    return { view, extensions, posts, answerTrigger, waiting, type, text, triggers, configs, warnings, quietly }
+}
+
 // ------------------------------------------------------------------------------------------ the checks
 async function main() {
     const pkg = readJson('package.json')
@@ -312,18 +427,21 @@ async function main() {
         }
     })
 
-    await check('build: dist/contentScript.js exists and bundles no CodeMirror of its own', () => {
+    await check('build: dist/contentScript.js requires @codemirror/view and @codemirror/state from Joplin and bundles no CodeMirror of its own', () => {
         const full = path.join(DIST, 'contentScript.js')
         assert.ok(fs.existsSync(full), 'dist/contentScript.js exists')
         const source = fs.readFileSync(full, 'utf8')
         // Every @codemirror/* module the script uses must stay a require() of Joplin's own copy (the externals
-        // block in webpack.config.js). A bundled copy shows up as CodeMirror's own code without such a require;
-        // the placeholder imports nothing, so for now this only proves the file is the small placeholder.
+        // block in webpack.config.js). A bundled copy shows up as CodeMirror's own code without such a require.
         const mentions = source.match(/@codemirror\/[a-z-]+/g) || []
         const required = source.match(/require\(\s*["']@codemirror\/[a-z-]+["']\s*\)/g) || []
         assert.strictEqual(mentions.length, required.length, 'every @codemirror/ mention is a require() call, not a bundled copy')
+        assert.deepStrictEqual([...new Set(required.map(call => call.match(/@codemirror\/[a-z-]+/)[0]))].sort(), ['@codemirror/state', '@codemirror/view'])
         assert.ok(!/class\s+EditorView\b|\bViewPlugin\.fromClass\b.*\bEditorState\.create\b/s.test(source), 'no CodeMirror view code in the bundle')
-        assert.ok(source.length < 20000, `the placeholder is small (${source.length} bytes)`)
+        assert.ok(source.length < 20000, `the content script is small: the trigger and its rule only (${source.length} bytes)`)
+        for (const name of ['triggerAt', 'occurrenceHolds', 'contextRange', '__jotActivatedEditors']) {
+            assert.ok(source.includes(name), `${name} is in the bundle (the rule bundled in, the double-mount guard kept)`)
+        }
     })
 
     await check('build: webpack.config.js keeps the six @codemirror/* modules of Harper external for the extra scripts, and contentScript.ts is the one extra script', () => {
@@ -376,17 +494,39 @@ async function main() {
         assert.ok(refused.warnings[1].startsWith('Jot: could not add Jot from the selection… to the editor\'s right-click menu'), refused.warnings[1])
     })
 
+    await check('typed trigger: onStart registers src/contentScript.ts as a CodeMirror plugin (one file for desktop and mobile) and its message handler', () => {
+        const registered = [{ type: 'codeMirrorPlugin', id: 'jot.trigger', path: './contentScript.js' }]
+        assert.deepStrictEqual(desktop.contentScripts, registered)
+        assert.deepStrictEqual(mobile.contentScripts, registered)
+        assert.deepStrictEqual(Object.keys(desktop.contentScriptHandlers), ['jot.trigger'])
+        assert.deepStrictEqual(Object.keys(mobile.contentScriptHandlers), ['jot.trigger'])
+        assert.ok(fs.existsSync(path.join(DIST, 'contentScript.js')), 'the path names the built script, next to index.js')
+        const source = read('src/index.ts')
+        assert.ok(/await setupTrigger\(\)\n\}/.test(source), 'setupTrigger runs last in setupPlugin')
+    })
+
+    await check('typed trigger: an app that refuses the content script still starts the plugin, with one console warning', async () => {
+        const state = await runBundle({ versionInfo: DESKTOP, contentScriptsThrow: true })
+        assert.deepStrictEqual(state.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button'])
+        assert.deepStrictEqual(state.toolbarButtons.length, 1)
+        assert.strictEqual(state.warnings.length, 1)
+        assert.ok(state.warnings[0].startsWith('Jot: could not add the typed trigger to the Markdown editor'), state.warnings[0])
+    })
+
     // ---------------------------------------------------------------- settings and the toolbar gate
-    await check('settings: section Jot with exactly defaultType, openTarget, dayStartTime and showToolbarButton on screen, worded as the brief\'s 4.6 table, and the hidden lastSelectionAction', () => {
+    await check('settings: section Jot with exactly defaultType, openTarget, trigger, dayStartTime and showToolbarButton on screen, worded as the brief\'s 4.6 table, and the hidden lastSelectionAction and lastTriggerAction', () => {
         assert.deepStrictEqual(desktop.sections.map(section => [section.name, section.spec.label]), [['jot', 'Jot']])
         const specs = desktop.settingSpecs
-        assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'openTarget', 'dayStartTime', 'showToolbarButton', 'lastSelectionAction'])
+        assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'openTarget', 'trigger', 'dayStartTime', 'showToolbarButton', 'lastSelectionAction', 'lastTriggerAction'])
+        const hidden = ['lastSelectionAction', 'lastTriggerAction']
         for (const key of Object.keys(specs)) {
             assert.strictEqual(specs[key].section, 'jot', `${key} is in the Jot section`)
-            assert.strictEqual(specs[key].public, key !== 'lastSelectionAction', `${key} is ${key === 'lastSelectionAction' ? 'hidden' : 'public'}`)
+            assert.strictEqual(specs[key].public, !hidden.includes(key), `${key} is ${hidden.includes(key) ? 'hidden' : 'public'}`)
         }
         assert.deepStrictEqual([specs.lastSelectionAction.value, specs.lastSelectionAction.type, specs.lastSelectionAction.isEnum], ['keep', 2, undefined],
             'a per-device string, keep until the user picks another')
+        assert.deepStrictEqual([specs.lastTriggerAction.value, specs.lastTriggerAction.type, specs.lastTriggerAction.isEnum], ['remove', 2, undefined],
+            'a per-device string, remove until the user picks another')
         const STRING = 2, BOOL = 3
         assert.deepStrictEqual(
             { label: specs.defaultType.label, description: specs.defaultType.description, value: specs.defaultType.value, type: specs.defaultType.type, isEnum: specs.defaultType.isEnum, options: specs.defaultType.options },
@@ -400,7 +540,9 @@ async function main() {
         assert.deepStrictEqual(
             { label: specs.showToolbarButton.label, description: specs.showToolbarButton.description, value: specs.showToolbarButton.value, type: specs.showToolbarButton.type },
             { label: 'Show the Jot button in the note toolbar', description: 'The button opens the form; on mobile it and the typed trigger are the ways in. Takes effect after Joplin restarts, since Joplin cannot add or remove a toolbar button while running.', value: true, type: BOOL })
-        assert.ok(!('trigger' in specs), 'the trigger setting comes with the content script (phase 3)')
+        assert.deepStrictEqual(
+            { label: specs.trigger.label, description: specs.trigger.description, value: specs.trigger.value, type: specs.trigger.type, isEnum: specs.trigger.isEnum },
+            { label: 'Typed trigger', description: 'Typing this at the start of a line or after a space opens Jot, in the Markdown editor on desktop and mobile. Leave empty to turn it off. A change applies as soon as you leave the settings.', value: '++', type: STRING, isEnum: undefined })
     })
 
     await check('toolbar gate: with showToolbarButton on (the default) jot.button is a NoteToolbar button on desktop and on mobile', () => {
@@ -817,8 +959,128 @@ async function main() {
         assert.deepStrictEqual(state.executes.slice(1), [{ name: 'replaceSelection', args: [`Pay rent\nflat\n[Pay rent](:/${outcome.id})`] }])
     })
 
+    // ---------------------------------------------------------------- the typed trigger: the plugin's handler
+    await check('trigger handler: a config message answers { trigger } with the setting trimmed ("" off); anything unknown answers null', async () => {
+        const { handler } = await triggerHandlerWith({})
+        assert.deepStrictEqual(await handler({ type: 'config' }), { trigger: '++' }, 'the default')
+        for (const [value, expected] of [[' ;; ', ';;'], ['', ''], ['   ', ''], [42, ''], ['@@jot', '@@jot']]) {
+            const set = await triggerHandlerWith({ settings: { trigger: value } })
+            assert.deepStrictEqual(await set.handler({ type: 'config' }), { trigger: expected }, JSON.stringify(value))
+        }
+        for (const message of [{ type: 'lint' }, {}, null, 'config', 42]) assert.strictEqual(await handler(message), null, JSON.stringify(message))
+    })
+
+    await check('trigger handler: a trigger message opens the form on the trigger route - no prefill, no selection read, In this note with Remove ++ and Replace ++ with a link to the new note, remove first - and Cancel answers cancel', async () => {
+        const { state, answer } = await fireTriggerWith({})
+        assert.deepStrictEqual(answer, { action: 'cancel' })
+        assert.strictEqual(state.dialogOpens, 1)
+        assert.deepStrictEqual(state.executes, [], 'no editor command at all: the selection is not read, nothing is edited from the plugin')
+        assert.deepStrictEqual(state.globalReads, [], 'which editor is up is not asked: the content script only runs in the Markdown editor')
+        const html = state.dialogHtml[0]
+        assert.ok(/<input type="text" name="title"[^>]*value=""/.test(html), 'no title prefill')
+        assert.ok(html.includes('>\n</textarea>'), 'no text prefill')
+        assert.ok(html.includes('<strong id="jotHeading" class="jot-heading">New to-do</strong>'), 'the default type')
+        assert.ok(/name="notebookId" id="jotNotebookId" value="fWork"/.test(html), 'the notebook of the note the editor holds')
+        assert.deepStrictEqual(choiceLabels(html), ['Remove ++', 'Replace ++ with a link to the new note'])
+        assert.ok(/data-choice="remove" role="radio" aria-checked="true" tabindex="0">Remove \+\+</.test(html), 'remove is the default')
+        assert.ok(/<input type="hidden" name="inThisNote" id="jotInThisNote" value="remove">/.test(html))
+        assert.deepStrictEqual(islandOf(html).data.inThisNote, { choices: ['remove', 'link'], value: 'remove' })
+        for (const button of html.match(/<button\b[^>]*>/g) || []) assert.ok(button.includes('type="button"'), `every button is type="button": ${button}`)
+        assert.deepStrictEqual([state.dataPosts, state.settingWrites], [[], []], 'Cancel writes nothing and remembers nothing')
+    })
+
+    await check('trigger handler: the labels print the trigger fired with (HTML-escaped), the setting when the message has none; the default is lastTriggerAction, an unknown one is remove', async () => {
+        const custom = await fireTriggerWith({}, ';;')
+        assert.deepStrictEqual(choiceLabels(custom.state.dialogHtml[0]), ['Remove ;;', 'Replace ;; with a link to the new note'])
+        const odd = await fireTriggerWith({}, '<b>')
+        assert.ok(odd.state.dialogHtml[0].includes('>Remove &lt;b&gt;</button>'), 'the trigger is escaped in the markup')
+        const { handler, state } = await triggerHandlerWith({ settings: { trigger: '@@' } })
+        await handler({ type: 'trigger', from: 0, to: 2 })
+        assert.deepStrictEqual(choiceLabels(state.dialogHtml[0]), ['Remove @@', 'Replace @@ with a link to the new note'])
+        const remembered = await fireTriggerWith({ settings: { lastTriggerAction: 'link' } })
+        assert.deepStrictEqual(islandOf(remembered.state.dialogHtml[0]).data.inThisNote, { choices: ['remove', 'link'], value: 'link' })
+        assert.ok(/data-choice="link" role="radio" aria-checked="true" tabindex="0"/.test(remembered.state.dialogHtml[0]))
+        const bogus = await fireTriggerWith({ settings: { lastTriggerAction: 'keep' } })
+        assert.strictEqual(islandOf(bogus.state.dialogHtml[0]).data.inThisNote.value, 'remove', 'the selection route\'s keep is not a trigger choice')
+    })
+
+    await check('trigger handler: Create with remove answers { action: \'remove\' }; with link { action: \'link\', link: [Title](:/id) } as the selection route builds it; the choice is remembered', async () => {
+        const remove = await fireTriggerWith({ dialogResults: [formResult('ok', { title: 'Call the bank', tags: 'work', inThisNote: 'remove' })] })
+        assert.deepStrictEqual(remove.answer, { action: 'remove' })
+        assert.deepStrictEqual(remove.state.timeline, ['POST notes', 'POST tags/tWork/notes', 'setValue lastTriggerAction=remove'], 'nothing opened, no editor command')
+        assert.deepStrictEqual(notePosts(remove.state)[0].body, { parent_id: 'fProj', is_todo: 1, title: 'Call the bank', body: '', todo_due: 0 })
+        const link = await fireTriggerWith({ dialogResults: [formResult('ok', { title: ' Call the [bank] ', inThisNote: 'link' })] })
+        assert.deepStrictEqual(link.answer, { action: 'link', link: '[Call the \\[bank\\]](:/note0001)' }, 'the trimmed title, brackets escaped')
+        assert.deepStrictEqual(link.state.timeline, ['POST notes', 'setValue lastTriggerAction=link'])
+        assert.deepStrictEqual(link.state.executes, [])
+        const emptied = await fireTriggerWith({ dialogResults: [formResult('ok', { title: '', body: 'First line\nrest', inThisNote: 'link' })] })
+        assert.deepStrictEqual(emptied.answer, { action: 'link', link: '[First line](:/note0001)' }, 'the title the empty-title rule gave')
+        const missing = await fireTriggerWith({ dialogResults: [formResult('ok', { title: 'No field' })] })
+        assert.deepStrictEqual(missing.answer, { action: 'remove' }, 'a result without the field is the first choice, remove')
+    })
+
+    await check('trigger handler: an empty Create, Escape and any other button answer cancel and write nothing; a refused Create reopens and then answers', async () => {
+        for (const result of [formResult('ok', { title: '', body: ' \n ', inThisNote: 'link' }), formResult('cancel', { title: 'x' }), formResult(undefined, { title: 'x' }), formResult('close', {})]) {
+            const { state, answer } = await fireTriggerWith({ dialogResults: [result] })
+            assert.deepStrictEqual(answer, { action: 'cancel' }, JSON.stringify(result.id))
+            assert.deepStrictEqual([state.dataPosts, state.settingWrites, state.executes], [[], [], []])
+        }
+        const refused = await fireTriggerWith({
+            dialogResults: [
+                formResult('ok', { title: 'Pay rent', inThisNote: 'link', dueDate: '2026-02-31', dueTime: '09:00' }),
+                formResult('ok', { title: 'Pay rent', inThisNote: 'link', dueDate: '2026-02-28', dueTime: '09:00' }),
+            ],
+        })
+        assert.strictEqual(refused.state.dialogOpens, 2)
+        assert.deepStrictEqual(islandOf(refused.state.dialogHtml[1]).data.inThisNote, { choices: ['remove', 'link'], value: 'link' }, 'the choice is kept on the reopen')
+        assert.deepStrictEqual(choiceLabels(refused.state.dialogHtml[1]), ['Remove ++', 'Replace ++ with a link to the new note'])
+        assert.deepStrictEqual(refused.answer, { action: 'link', link: '[Pay rent](:/note0001)' })
+        const none = await fireTriggerWith({ folders: [] })
+        assert.deepStrictEqual([none.answer, none.state.messageBoxes], [{ action: 'cancel' }, ['Jot: there is no notebook to create in.']])
+    })
+
+    await check('trigger handler: Create and open answers with open: id and opens nothing until the content script asks; the open message opens that note once, in the editor or a new window', async () => {
+        const { state, handler, answer } = await fireTriggerWith({ dialogResults: [formResult('openAfter', { title: 'Open me', inThisNote: 'remove' })] })
+        assert.deepStrictEqual(answer, { action: 'remove', open: 'note0001' })
+        assert.deepStrictEqual(state.timeline, ['POST notes', 'setValue lastTriggerAction=remove'], 'not opened yet: the edit must reach the note the trigger was typed in first')
+        assert.deepStrictEqual(await handler({ type: 'open', id: 'someOtherNote' }), { opened: false }, 'only the note the trigger form created')
+        assert.deepStrictEqual(await handler({ type: 'open', id: 'note0001' }), { opened: true })
+        assert.deepStrictEqual(state.executes, [{ name: 'openNote', args: ['note0001'] }])
+        assert.deepStrictEqual(await handler({ type: 'open', id: 'note0001' }), { opened: false }, 'once')
+        assert.deepStrictEqual(await handler({ type: 'open' }), { opened: false })
+        assert.strictEqual(state.executes.length, 1)
+        const windowed = await fireTriggerWith({ settings: { openTarget: 'window' }, dialogResults: [formResult('openAfter', { title: 'Window', inThisNote: 'link' })] })
+        assert.deepStrictEqual(windowed.answer, { action: 'link', link: '[Window](:/note0001)', open: 'note0001' })
+        await windowed.handler({ type: 'open', id: 'note0001' })
+        assert.deepStrictEqual(windowed.state.executes, [{ name: 'openNoteInNewWindow', args: ['note0001'] }])
+    })
+
+    await check('lastTriggerAction is written after a create on the trigger route only; lastSelectionAction after one on the selection route only; the plain route writes neither', async () => {
+        const trigger = await fireTriggerWith({ dialogResults: [formResult('ok', { title: 'T', inThisNote: 'link' })] })
+        assert.deepStrictEqual(trigger.state.settingWrites, [{ key: 'lastTriggerAction', value: 'link' }])
+        const selection = await openSelectionWith('Idea', { dialogResults: [formResult('ok', { title: 'Idea', inThisNote: 'replace' })] })
+        assert.deepStrictEqual(selection.state.settingWrites, [{ key: 'lastSelectionAction', value: 'replace' }])
+        const plain = await openFormWith({ dialogResults: [formResult('ok', { title: 'Plain', inThisNote: 'link' })] })
+        assert.deepStrictEqual(plain.state.settingWrites, [])
+        assert.ok(!plain.state.dialogHtml[0].includes('jotInThisNoteRow'))
+    })
+
+    await check('trigger handler: one form at a time - a trigger while the form is up answers cancel at once, and a command while the trigger\'s form is up resolves null', async () => {
+        let release
+        const held = new Promise(resolve => { release = resolve })
+        const { state, handler } = await triggerHandlerWith({ openDialog: () => held })
+        const first = handler({ type: 'trigger', from: 0, to: 2, trigger: '++' })
+        await tick(10)
+        assert.deepStrictEqual(await handler({ type: 'trigger', from: 5, to: 7, trigger: '++' }), { action: 'cancel' })
+        assert.strictEqual(await state.commands.find(item => item.name === 'jot.open').execute(), null)
+        release(formResult('ok', { title: 'First', inThisNote: 'remove' }))
+        assert.deepStrictEqual(await first, { action: 'remove' })
+        assert.strictEqual(state.dialogOpens, 1)
+    })
+
     // ---------------------------------------------------------------- the pure model
     const FormModel = require(path.join(ROOT, 'src', 'form', 'formModel.js'))
+    const TriggerRule = require(path.join(ROOT, 'src', 'form', 'triggerRule.js'))
     const SearchTokens = require(path.join(ROOT, 'src', 'form', 'searchTokens.js'))
     const AlarmQuick = require(path.join(ROOT, 'src', 'form', 'alarmQuick.js'))
 
@@ -952,6 +1214,89 @@ async function main() {
         assert.deepStrictEqual([refused.kind, refused.values.inThisNote], ['invalidDue', 'replace'], 'a refused Create keeps the choice')
     })
 
+    await check('formModel: the trigger route\'s choices, labels with the trigger printed, the answer shapes, and inThisNoteAction falling back to the first offered', () => {
+        assert.deepStrictEqual(FormModel.triggerChoices(), ['remove', 'link'])
+        assert.deepStrictEqual(FormModel.triggerLabels('++'), { remove: 'Remove ++', link: 'Replace ++ with a link to the new note' })
+        assert.deepStrictEqual(FormModel.triggerLabels(';;jot'), { remove: 'Remove ;;jot', link: 'Replace ;;jot with a link to the new note' })
+        assert.deepStrictEqual(FormModel.triggerAnswer('remove', '[T](:/x)'), { action: 'remove' })
+        assert.deepStrictEqual(FormModel.triggerAnswer('link', '[T](:/x)'), { action: 'link', link: '[T](:/x)' })
+        assert.deepStrictEqual(FormModel.triggerAnswer('link', ''), { action: 'cancel' }, 'a link with no text is no answer to apply')
+        for (const choice of [null, undefined, 'keep', 'cancel']) assert.deepStrictEqual(FormModel.triggerAnswer(choice, '[T](:/x)'), { action: 'cancel' })
+        assert.strictEqual(FormModel.inThisNoteAction('link', ['remove', 'link']), 'link')
+        for (const value of ['', 'keep', 'bogus', undefined]) assert.strictEqual(FormModel.inThisNoteAction(value, ['remove', 'link']), 'remove')
+        assert.strictEqual(FormModel.inThisNoteAction('x', []), 'keep')
+        assert.strictEqual(FormModel.selectionAction, FormModel.inThisNoteAction, 'selectionAction is the same rule under its first name')
+        const options = { defaultType: 'todo', dayStart: '09:00', notebookId: 'fWork', inThisNoteChoices: ['remove', 'link'] }
+        assert.strictEqual(FormModel.planCreate(formResult('ok', { title: 't', inThisNote: 'link' }), options).inThisNote, 'link')
+        assert.strictEqual(FormModel.planCreate(formResult('ok', { title: 't', inThisNote: 'after' }), options).inThisNote, 'remove')
+    })
+
+    await check('triggerRule: the trigger fires at a line start (the document\'s, or after a newline), after a space and after a tab - and never inside a word (C++, i++, a+++)', () => {
+        const fire = (doc, trigger = '++') => {
+            const end = doc.length
+            const around = TriggerRule.contextRange(end, trigger.length)
+            return TriggerRule.triggerAt(doc.slice(around.from, around.to), around.from, trigger, { from: end - 1, to: end }, [])
+        }
+        assert.deepStrictEqual(fire('++'), { fires: true, from: 0, to: 2, cancelled: false }, 'the document\'s start')
+        assert.deepStrictEqual(fire('first line\n++'), { fires: true, from: 11, to: 13, cancelled: false }, 'a line start')
+        assert.deepStrictEqual(fire('hello ++'), { fires: true, from: 6, to: 8, cancelled: false }, 'after a space')
+        assert.deepStrictEqual(fire('hello\t++'), { fires: true, from: 6, to: 8, cancelled: false }, 'after a tab')
+        assert.strictEqual(fire('hello\u00a0++').fires, true, 'after a no-break space')
+        for (const doc of ['C++', 'i++', 'hello C++', 'a+++', '+++', 'hello +++', 'x++', '(++']) {
+            assert.deepStrictEqual(fire(doc), { fires: false, from: null, to: null, cancelled: false }, `${JSON.stringify(doc)} does not fire`)
+        }
+        assert.strictEqual(fire('hello +').fires, false)
+        assert.strictEqual(fire('').fires, false)
+    })
+
+    await check('triggerRule: typed one character at a time, the trigger fires exactly on its last; a longer trigger likewise; an empty trigger never fires', () => {
+        const typeAll = (text, trigger) => {
+            const fired = []
+            for (let end = 1; end <= text.length; end++) {
+                const around = TriggerRule.contextRange(end, trigger.length)
+                const verdict = TriggerRule.triggerAt(text.slice(around.from, around.to), around.from, trigger, { from: end - 1, to: end }, [])
+                if (verdict.fires) fired.push([end, verdict.from, verdict.to])
+            }
+            return fired
+        }
+        assert.deepStrictEqual(typeAll('hello ++', '++'), [[8, 6, 8]], 'only the second +')
+        assert.deepStrictEqual(typeAll('hello +++ C++ i++ ++', '++'), [[8, 6, 8], [20, 18, 20]], 'the third + and the ++ inside words do not fire')
+        assert.deepStrictEqual(typeAll('note ;;jot and ;;jo', ';;jot'), [[10, 5, 10]], 'a longer trigger fires on its last character only')
+        assert.deepStrictEqual(typeAll(';;jot', ';;jot'), [[5, 0, 5]])
+        assert.deepStrictEqual(typeAll('++ ++\n++', ''), [], 'an empty trigger never fires')
+        // An insertion of several characters (an input method's commit) fires when it ends with the trigger.
+        const commit = TriggerRule.triggerAt('a ++', 0, '++', { from: 0, to: 4 }, [])
+        assert.deepStrictEqual(commit, { fires: true, from: 2, to: 4, cancelled: false })
+        assert.strictEqual(TriggerRule.triggerAt('a ++ b', 0, '++', { from: 0, to: 6 }, []).fires, false, 'only at the insertion\'s end')
+        assert.strictEqual(TriggerRule.triggerAt('a ++', 0, '++', { from: 4, to: 4 }, []).fires, false, 'an empty insertion (a deletion) never fires')
+        assert.strictEqual(TriggerRule.triggerAt('++', 1, '++', { from: 2, to: 3 }, []).fires, false, 'a slice too short to decide does not fire')
+    })
+
+    await check('triggerRule: a cancelled occurrence does not fire again until the range changes; normalizeTrigger and contextRange', () => {
+        const cancelled = [{ from: 6, to: 8, text: '++' }]
+        // The same ++ rewritten with the same text (an input method re-committing it) is the cancelled occurrence: no fire.
+        assert.deepStrictEqual(TriggerRule.triggerAt(' ++', 5, '++', { from: 6, to: 8 }, cancelled), { fires: false, from: 6, to: 8, cancelled: true })
+        assert.deepStrictEqual(TriggerRule.triggerAt(' ++', 5, '++', { from: 7, to: 8 }, cancelled), { fires: false, from: 6, to: 8, cancelled: true })
+        assert.strictEqual(TriggerRule.triggerAt(' ++', 5, '++', { from: 7, to: 8 }, [{ from: 6, to: 8, text: ';;' }]).fires, true, 'another trigger\'s memory')
+        assert.strictEqual(TriggerRule.triggerAt(' ++', 7, '++', { from: 9, to: 10 }, cancelled).fires, true, 'another occurrence fires')
+        // Whether a remembered occurrence still holds after a change: the same text, after a line start or whitespace.
+        assert.strictEqual(TriggerRule.occurrenceHolds(' ++', 5, cancelled[0]), true, 'unchanged, or rewritten with the same text')
+        assert.strictEqual(TriggerRule.occurrenceHolds('x++', 5, cancelled[0]), false, 'a character typed right before it')
+        assert.strictEqual(TriggerRule.occurrenceHolds(' +x', 5, cancelled[0]), false, 'a character of it changed')
+        assert.strictEqual(TriggerRule.occurrenceHolds(' +', 5, cancelled[0]), false, 'a character of it deleted')
+        assert.strictEqual(TriggerRule.occurrenceHolds('++', 0, { from: 0, to: 2, text: '++' }), true, 'at the document\'s start')
+        assert.strictEqual(TriggerRule.occurrenceHolds('++', 0, { from: -1, to: 1, text: '++' }), false, 'mapped off the start')
+        assert.strictEqual(TriggerRule.occurrenceHolds('+++', 0, { from: 0, to: 3, text: '++' }), false, 'a length that is not the text\'s')
+        // Once the memory is dropped, the occurrence typed again fires.
+        assert.strictEqual(TriggerRule.triggerAt(' ++', 5, '++', { from: 7, to: 8 }, []).fires, true)
+        assert.strictEqual(TriggerRule.normalizeTrigger(' ++ '), '++')
+        for (const value of ['', '   ', null, undefined, 42, {}]) assert.strictEqual(TriggerRule.normalizeTrigger(value), '', JSON.stringify(value))
+        assert.strictEqual(TriggerRule.DEFAULT_TRIGGER, '++')
+        assert.deepStrictEqual(TriggerRule.contextRange(8, 2), { from: 5, to: 8 })
+        assert.deepStrictEqual(TriggerRule.contextRange(2, 2), { from: 0, to: 2 })
+        assert.deepStrictEqual(TriggerRule.contextRange(1, 2), { from: 0, to: 1 })
+    })
+
     await check('formModel suggestions: notebooks filtered by matchesFilter, the tag token around the caret, tags minus those present, the pick', () => {
         assert.deepStrictEqual(FormModel.notebookSuggestions(SORTED_NOTEBOOKS, 'WORK').map(n => n.id), ['fWork', 'fProj'])
         assert.deepStrictEqual(FormModel.notebookSuggestions(SORTED_NOTEBOOKS, ' ').length, 5, 'a blank filter keeps every notebook')
@@ -1045,7 +1390,7 @@ async function main() {
         for (const gone of ['alarmIsMulti', 'describeAlarmPlan', 'applyAlarmPlan', 'onAlarmModeChanged']) assert.ok(!glue.includes(gone), `${gone} is not ported`)
     })
 
-    await check('dialog glue: the In this note radios are wired on their group (click, arrow keys wrapping through moveHighlight), write the hidden inThisNote, and fall back to keep', () => {
+    await check('dialog glue: the In this note radios are wired on their group (click, arrow keys wrapping through moveHighlight), write the hidden inThisNote, and fall back to the first button drawn', () => {
         const glue = read('src/form/formWebview.js')
         assert.ok(glue.includes("choiceGroup.addEventListener('click', onJotChoiceClick)") && glue.includes("choiceGroup.addEventListener('keydown', onJotChoiceKeyDown)"),
             'the listeners sit on the radiogroup, only when the row is there')
@@ -1053,9 +1398,173 @@ async function main() {
         assert.ok(keys.includes('model().moveHighlight(options.length, current, delta)'), 'the arrow keys wrap through the offered buttons')
         assert.ok(keys.includes('event.preventDefault()'), 'an arrow key does not scroll the dialog')
         const setter = glue.slice(glue.indexOf('function setJotInThisNote'), glue.indexOf('function onJotChoiceClick'))
-        assert.ok(setter.includes('input.value = value') && setter.includes('model().KEEP'), 'the hidden input carries the choice; an unknown one is keep')
+        assert.ok(setter.includes('input.value = value'), 'the hidden input carries the choice')
+        assert.ok(setter.includes("options[0].getAttribute('data-choice')") && !setter.includes('model().KEEP'),
+            'an unknown one is the first button drawn (keep on the selection route, remove on the trigger route), not keep on every route')
         const css = read('src/form/form.css').replace(/\/\*[\s\S]*?\*\//g, '')
         assert.ok(/\.jot-choice\s*\{[^}]*flex-direction:\s*column;/.test(css), 'the long labels are stacked')
+    })
+
+    // ---------------------------------------------------------------- the content script, in Node
+    await check('content script: plugin() adds one update listener (and the compositionend handler) and asks for the trigger; a second mount on the same view is a no-op; CodeMirror 5 gets nothing', async () => {
+        const editor = await mountTrigger('')
+        assert.strictEqual(editor.extensions.length, 1, 'one addExtension call')
+        assert.strictEqual(editor.view.state.facet(CMEditorView.updateListener).length, 1, 'one update listener')
+        assert.deepStrictEqual(editor.posts, [{ type: 'config' }])
+        const exported = loadContentScript()
+        const added = []
+        const sameView = { id: 'view' }
+        const control = { cm6: sameView, editor: sameView, addExtension: (extension) => added.push(extension) }
+        global.window = {}
+        try {
+            const contextOnce = makeContentContext().context
+            exported(contextOnce).plugin(control)
+            exported(contextOnce).plugin(control)
+            assert.strictEqual(added.length, 1, 'mobile mounts twice (joplin#12891): the second is a no-op')
+            exported(contextOnce).plugin({ ...control, cm6: { id: 'other' }, editor: undefined })
+            assert.strictEqual(added.length, 2, 'another editor is watched')
+        } finally {
+            delete global.window
+        }
+        exported(makeContentContext().context).plugin({ addExtension: (extension) => added.push(extension) })
+        assert.strictEqual(added.length, 2, 'no cm6: nothing added')
+        assert.ok(read('src/contentScript.ts').includes('editorControl.addExtension('), 'Joplin ignores what plugin() returns; addExtension is the way in')
+    })
+
+    await check('content script: "hello ++" typed one character at a time fires once, on the last +, with from and to; remove deletes it in one transaction and the caret stays where it was', async () => {
+        const editor = await mountTrigger('')
+        editor.type('hello +')
+        assert.deepStrictEqual(editor.triggers(), [])
+        let transactions = 0
+        editor.type('+')
+        assert.deepStrictEqual(editor.triggers(), [{ type: 'trigger', from: 6, to: 8, trigger: '++' }])
+        const realApply = editor.view.apply.bind(editor.view)
+        editor.view.apply = (trs) => { transactions += trs.filter(tr => tr.docChanged).length; realApply(trs) }
+        await editor.answerTrigger({ action: 'remove' })
+        assert.strictEqual(editor.text(), 'hello ')
+        assert.strictEqual(transactions, 1, 'one transaction changes the text')
+        assert.strictEqual(editor.view.state.selection.main.head, 6, 'the caret, after the trigger, is where the trigger was')
+        assert.strictEqual(editor.configs().length, 2, 'the trigger is asked again after the fire')
+        editor.type('world')
+        assert.strictEqual(editor.text(), 'hello world')
+        assert.strictEqual(editor.triggers().length, 1, 'nothing else fired')
+    })
+
+    await check('content script: link replaces the trigger with the link (the caret after it); Create and open\'s open is asked after the edit; a second ++ waits while one is asked', async () => {
+        const editor = await mountTrigger('Call ')
+        editor.type('++')
+        editor.type(' ++')
+        assert.strictEqual(editor.triggers().length, 1, 'one fire at a time')
+        await editor.answerTrigger({ action: 'link', link: '[Call](:/0123456789abcdef0123456789abcdef)', open: '0123456789abcdef0123456789abcdef' })
+        assert.strictEqual(editor.text(), 'Call [Call](:/0123456789abcdef0123456789abcdef) ++')
+        assert.deepStrictEqual(editor.posts.filter(post => post.type === 'open'), [{ type: 'open', id: '0123456789abcdef0123456789abcdef' }])
+        const order = editor.posts.map(post => post.type)
+        assert.ok(order.indexOf('open') > order.indexOf('trigger'), 'open after the trigger was answered')
+        const moved = await mountTrigger('hello ')
+        moved.type('++')
+        moved.view.dispatch({ changes: { from: 0, insert: 'Oh, ' }, userEvent: 'input.type' })
+        await moved.answerTrigger({ action: 'link', link: '[T](:/x)' })
+        assert.strictEqual(moved.text(), 'Oh, hello [T](:/x)', 'from and to were mapped through the change made while the form was up')
+        assert.strictEqual(moved.view.state.selection.main.head, moved.text().length)
+    })
+
+    await check('content script: Cancel leaves the trigger and remembers it - one more character does not fire, the same ++ rewritten does not; deleted and retyped, it fires again', async () => {
+        const editor = await mountTrigger('')
+        editor.type('++')
+        await editor.answerTrigger({ action: 'cancel' })
+        assert.strictEqual(editor.text(), '++')
+        editor.type('x')
+        assert.strictEqual(editor.triggers().length, 1, 'one more character: no fire')
+        editor.view.dispatch({ changes: { from: 2, to: 3 }, userEvent: 'delete.backward' })
+        editor.view.dispatch({ changes: { from: 0, to: 2, insert: '++' }, userEvent: 'input.type' })
+        assert.strictEqual(editor.triggers().length, 1, 'the same ++ rewritten with the same text (an input method re-committing it): no fire')
+        editor.view.dispatch({ changes: { from: 1, to: 2 }, userEvent: 'delete.backward' })
+        editor.type('+')
+        assert.strictEqual(editor.triggers().length, 2, 'a + deleted and typed again is a new occurrence')
+        await editor.answerTrigger(undefined)
+        editor.view.dispatch({ changes: { from: 0, to: 2, insert: '++' }, userEvent: 'input.type' })
+        assert.strictEqual(editor.triggers().length, 2, 'no answer at all is a cancel too')
+        const before = await mountTrigger('')
+        before.type('++')
+        await before.answerTrigger({ action: 'cancel' })
+        before.view.dispatch({ changes: { from: 0, insert: 'x' }, userEvent: 'input.type' })
+        before.view.dispatch({ changes: { from: 0, to: 1 }, userEvent: 'delete.backward' })
+        before.view.dispatch({ changes: { from: 0, to: 2, insert: '++' }, userEvent: 'input.type' })
+        assert.strictEqual(before.triggers().length, 2, 'a character typed before it changed the occurrence: the memory is dropped')
+    })
+
+    await check('content script: C++ and i++ do not fire; the trigger arriving by paste, by insertText (no user event), by undo or redo, or by autocompletion does not fire', async () => {
+        const editor = await mountTrigger('')
+        editor.type('C++ i++ (++')
+        assert.deepStrictEqual(editor.triggers(), [])
+        for (const userEvent of ['input.paste', 'undo', 'redo', 'input.complete', 'input.drop', 'input.jot', undefined]) {
+            const fresh = await mountTrigger('via ')
+            fresh.view.dispatch({ changes: { from: 4, insert: '++' }, selection: { anchor: 6 }, ...(userEvent ? { userEvent } : {}) })
+            assert.strictEqual(fresh.text(), 'via ++')
+            assert.deepStrictEqual(fresh.triggers(), [], `${userEvent || 'no user event'} does not fire`)
+            fresh.type('+')
+            assert.deepStrictEqual(fresh.triggers(), [], `${userEvent || 'no user event'}, then a third +: still nothing`)
+        }
+    })
+
+    await check('content script: while the view is composing nothing fires; once the composition is over the composed ++ fires once', async () => {
+        const editor = await mountTrigger('hello ')
+        editor.view.composing = true
+        editor.type('++', 'input.type.compose')
+        assert.deepStrictEqual(editor.triggers(), [], 'not while composing')
+        editor.view.composing = false
+        editor.view.apply([])
+        assert.deepStrictEqual(editor.triggers(), [{ type: 'trigger', from: 6, to: 8, trigger: '++' }], 'at the first update after the composition')
+        editor.view.dispatch({ changes: { from: 6, to: 8, insert: '++' }, userEvent: 'input.type.compose' })
+        assert.strictEqual(editor.triggers().length, 1, 'never twice')
+        await editor.answerTrigger({ action: 'remove' })
+        assert.strictEqual(editor.text(), 'hello ')
+        const source = read('src/contentScript.ts')
+        assert.ok(source.includes('compositionend') && source.includes('compositionEnded(view)'), 'compositionend also schedules the check, in case no update follows it')
+    })
+
+    await check('content script: another note (a whole-document replacement with no user event, or a note-id effect) re-asks the trigger, drops the memory, and leaves a pending edit undone', async () => {
+        const editor = await mountTrigger('hello ')
+        editor.type('++')
+        editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: 'another note ++' } })
+        assert.strictEqual(editor.configs().length, 2, 'a replaced document asks for the trigger again')
+        await editor.quietly(() => editor.answerTrigger({ action: 'remove' }))
+        assert.strictEqual(editor.text(), 'another note ++', 'the edit is not made in the other note')
+        assert.ok(editor.warnings.some(line => line.startsWith('Jot: the typed trigger is no longer where it was typed')), editor.warnings.join(' | '))
+        const noteId = CMStateEffect.define()
+        const same = await mountTrigger('same text')
+        same.view.dispatch({ effects: noteId.of('0123456789abcdef0123456789abcdef') })
+        assert.strictEqual(same.configs().length, 2, 'another note with the same text: its id in an effect')
+        same.view.dispatch({ effects: noteId.of('not a note id') })
+        same.view.dispatch({ changes: { from: 0, insert: 'x' }, userEvent: 'input.type' })
+        assert.strictEqual(same.configs().length, 2, 'typing and other effects do not ask')
+        const memory = await mountTrigger('')
+        memory.type('++')
+        await memory.answerTrigger({ action: 'cancel' })
+        memory.view.dispatch({ changes: { from: 0, to: 2, insert: '++' } })
+        memory.view.dispatch({ changes: { from: 0, to: 2, insert: '++' }, userEvent: 'input.type' })
+        assert.strictEqual(memory.triggers().length, 2, 'the memory belonged to the document that was replaced')
+    })
+
+    await check('content script: the trigger in force is the plugin\'s answer - "" turns it off, a new one applies from the next answer, an unanswered question is asked again', async () => {
+        const off = await mountTrigger('', { trigger: '' })
+        off.type('++ ++')
+        assert.deepStrictEqual(off.triggers(), [])
+        let value = ';;'
+        const changing = await mountTrigger('', () => ({ trigger: value }))
+        changing.type('++ ;;')
+        assert.deepStrictEqual(changing.triggers(), [{ type: 'trigger', from: 3, to: 5, trigger: ';;' }])
+        value = '@@'
+        await changing.answerTrigger({ action: 'cancel' })
+        changing.type(' ;; @@')
+        assert.deepStrictEqual(changing.triggers().map(post => post.trigger), [';;', '@@'], 'the answer after the fire brought the new trigger')
+        const late = await mountTrigger('', (attempt) => (attempt === 1 ? undefined : { trigger: '++' }))
+        late.type('++')
+        assert.deepStrictEqual(late.triggers(), [], 'off until the plugin has answered')
+        await tick(700)
+        assert.strictEqual(late.configs().length, 2, 'an empty answer (the handler not wired yet) is asked again')
+        late.type(' ++')
+        assert.deepStrictEqual(late.triggers().map(post => [post.from, post.to]), [[3, 5]])
     })
 
     // ---------------------------------------------------------------- the sandbox proxy rule
@@ -1073,7 +1582,8 @@ async function main() {
         }
         walk(path.join(ROOT, 'src'))
         assert.ok(files.length >= 3, 'the audit must actually have found the source tree')
-        for (const file of ['index.ts', 'core/settings.ts', 'form/form.ts', 'form/formHtml.ts', 'form/formModel.js', 'form/formWebview.js', 'form/editorSelection.ts']) {
+        for (const file of ['index.ts', 'core/settings.ts', 'form/form.ts', 'form/formHtml.ts', 'form/formModel.js', 'form/formWebview.js', 'form/editorSelection.ts',
+            'trigger.ts', 'contentScript.ts', 'form/triggerRule.js']) {
             assert.ok(files.includes(path.join(ROOT, 'src', file)), `the audit covers src/${file}`)
         }
 

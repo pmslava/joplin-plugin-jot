@@ -6,7 +6,8 @@
  * What is here: the dialog result's dispatch (which button), the form values read back from formData, the empty-title rule, the tag csv, the date   *
  * and time validation (Cockpit's parseAlarmFields), the due timestamp, the day start time, the notebook paths and the notebook default order, the    *
  * create plan the host executes, the selection route's rules (the title/text split, the In this note choices and their default, the link, the edit  *
- * the host makes in the note), and the small helpers the dialog's glue asks (the heading, the Due row text, the suggestion lists, the tag token).    *
+ * the host makes in the note), the trigger route's (its two choices, their labels with the trigger printed, the answer the content script gets),     *
+ * and the small helpers the dialog's glue asks (the heading, the Due row text, the suggestion lists, the tag token).                                *
  *                                                                                                                                                  *
  * CROSS-SCRIPT GLOBALS. In the dialog, window.SearchTokens (searchTokens.js, the filter rule copied from Cockpit) may load before or after this file:*
  * addScript appends plain <script> elements, which run in the order they finish loading. So it is looked up per call (searchTokens below), never     *
@@ -38,6 +39,11 @@
         replace: 'Replace it with a link to the new note',
         after: 'Add a link after it',
     }
+    // The In this note choices of the trigger route (brief 4.4): remove the typed trigger, or replace it with the link; and the answer that says
+    // nothing is to change. Their labels print the trigger itself (triggerLabels).
+    var REMOVE = 'remove'
+    var LINK = 'link'
+    var CANCEL = 'cancel'
     // The title Joplin shows for a note whose title is empty, used as the link's text so a link to such a note is never invisible.
     var UNTITLED = 'Untitled'
 
@@ -267,8 +273,8 @@
      * Create and open with both fields empty creates the empty note and opens it (Joplin's own New note, one step later). A note has no due date, so   *
      * its Due fields are neither read nor validated (switching to Note clears nothing in the form, but writes none of it). options: { defaultType,       *
      * dayStart, notebookId, inThisNoteChoices } - the type a result without one reads as, the day start time, the notebook used when the form sent none,*
-     * and the In this note choices the form offered (the selection route only). The plan's inThisNote is the choice to apply, one of those offered      *
-     * (anything else reads as keep), or null on a route that offered none.                                                                               *
+     * and the In this note choices the form offered (the selection and trigger routes). The plan's inThisNote is the choice to apply, one of those      *
+     * offered (anything else reads as the first offered), or null on a route that offered none.                                                          *
      ***************************************************************************************************************************************************/
     function planCreate(result, options){
         var settings = options || {}
@@ -285,7 +291,7 @@
             kind: 'create',
             values: values,
             open: action === 'createAndOpen',
-            inThisNote: choices.length ? selectionAction(values.inThisNote, choices) : null,
+            inThisNote: choices.length ? inThisNoteAction(values.inThisNote, choices) : null,
             note: {
                 parent_id: values.notebookId || text(settings.notebookId),
                 is_todo: isTodo ? 1 : 0,
@@ -308,18 +314,44 @@
         return { title: named.title, body: named.body, empty: named.nothing }
     }
 
-    /** selectionChoices / selectionAction ***************************************************************************************************************
-     * The In this note buttons the form offers: Keep, Replace and Add after in the Markdown editor; Keep and Replace in the Rich Text editor, where the   *
-     * selection comes back as plain text and writing it back would lose its formatting. selectionAction is the choice that holds among those offered:   *
-     * the value when it is one of them, otherwise keep. It is the form's default (from the choice remembered last time) and what a create applies.      *
+    /** selectionChoices / inThisNoteAction **************************************************************************************************************
+     * The In this note buttons the selection route offers: Keep, Replace and Add after in the Markdown editor; Keep and Replace in the Rich Text editor,*
+     * where the selection comes back as plain text and writing it back would lose its formatting. inThisNoteAction is the choice that holds among the   *
+     * buttons offered, on either route: the value when it is one of them, otherwise the first offered (keep on the selection route, remove on the       *
+     * trigger route). It is the form's default (from the choice remembered last time) and what a create applies. selectionAction is its first name.    *
      ***************************************************************************************************************************************************/
     function selectionChoices(markdownEditor){
         return markdownEditor ? [KEEP, REPLACE, AFTER] : [KEEP, REPLACE]
     }
 
-    function selectionAction(value, choices){
+    function inThisNoteAction(value, choices){
         var list = Array.isArray(choices) ? choices : []
-        return list.indexOf(value) >= 0 ? value : KEEP
+        if (list.indexOf(value) >= 0) return value
+        return list.length ? list[0] : KEEP
+    }
+
+    /** triggerChoices / triggerLabels / triggerAnswer ***************************************************************************************************
+     * The trigger route's In this note row (brief 4.4 and section 5): Remove ++ (the default until another is remembered) and Replace ++ with a link to *
+     * the new note, with the trigger the user typed printed in both labels. triggerAnswer is what the content script gets back once the form closes:    *
+     * { action: 'remove' }, { action: 'link', link } with the Markdown link to the new note, or { action: 'cancel' } when nothing was created (Cancel,   *
+     * Escape, an empty Create) or no choice of the two was made. The content script applies remove and link to the document; cancel changes nothing.   *
+     ***************************************************************************************************************************************************/
+    function triggerChoices(){
+        return [REMOVE, LINK]
+    }
+
+    function triggerLabels(trigger){
+        var shown = text(trigger)
+        var labels = {}
+        labels[REMOVE] = 'Remove ' + shown
+        labels[LINK] = 'Replace ' + shown + ' with a link to the new note'
+        return labels
+    }
+
+    function triggerAnswer(choice, link){
+        if (choice === REMOVE) return { action: REMOVE }
+        if (choice === LINK && text(link)) return { action: LINK, link: text(link) }
+        return { action: CANCEL }
     }
 
     /** noteLink ****************************************************************************************************************************************
@@ -428,6 +460,9 @@
         REPLACE: REPLACE,
         AFTER: AFTER,
         SELECTION_LABELS: SELECTION_LABELS,
+        REMOVE: REMOVE,
+        LINK: LINK,
+        CANCEL: CANCEL,
         normalizeType: normalizeType,
         headingFor: headingFor,
         dialogAction: dialogAction,
@@ -446,7 +481,11 @@
         planCreate: planCreate,
         splitSelection: splitSelection,
         selectionChoices: selectionChoices,
-        selectionAction: selectionAction,
+        inThisNoteAction: inThisNoteAction,
+        selectionAction: inThisNoteAction,
+        triggerChoices: triggerChoices,
+        triggerLabels: triggerLabels,
+        triggerAnswer: triggerAnswer,
         noteLink: noteLink,
         selectionEdit: selectionEdit,
         notebookSuggestions: notebookSuggestions,

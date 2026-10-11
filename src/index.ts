@@ -1,13 +1,16 @@
 /** README ******************************************************************************************************************************************
  * Jot: quick capture of a note or to-do without leaving the one you are in (docs/BRIEF-1.0-jot.md).                                                *
  *                                                                                                                                                  *
- * PHASES 1 AND 2: the form in create mode (src/form/), reached three ways, all behind one openJot(route) (brief 4.4):                              *
+ * PHASES 1 TO 3: the form in create mode (src/form/), reached three ways through commands, all behind one openJot(route) (brief 4.4):             *
  *   - jot.open, "Jot…": Tools > Jot… with its default chord on desktop, the command palette, and (later) other plugins' entry point;              *
  *   - jot.fromSelection, "Jot from the selection…": the editor's right-click menu on desktop;                                                      *
  *   - jot.button, "Jot": the note toolbar button, on desktop and mobile, made at startup only while showToolbarButton is on.                        *
  * Each reads the editor's selection first: highlighted text opens the form prefilled from it, with the In this note row (the selection route), so  *
  * one chord serves both; no selection opens the plain form. A menu passes a command no argument, so the selection is always read, never received.  *
  * A command has one label, and the menu items and the toolbar button each show their command's, so each wording is a command of its own.          *
+ *                                                                                                                                                  *
+ * And a fourth way, with no command: the typed trigger (++ by default) in the Markdown editor, on desktop and mobile, watched by the CodeMirror 6    *
+ * content script that src/trigger.ts registers; the form opens on its own route and the content script applies the answer to the editor.          *
  *                                                                                                                                                  *
  * THE SANDBOX PROXY RULE: every joplin.* member is read and called in ONE expression (`await joplin.commands.register({...})`, never a member kept  *
  * in a variable and called later), because the proxy path corrupts otherwise. test/run.js audits every source file for it.                        *
@@ -19,6 +22,7 @@ import { MenuItemLocation, ToolbarButtonLocation } from 'api/types'
 import { isMobile } from './core/platform'
 import { isToolbarButtonEnabled, setupSettings } from './core/settings'
 import { openJot } from './form/form'
+import { setupTrigger } from './trigger'
 
 /** Constants ***************************************************************************************************************************************/
 // The command other plugins call (brief section 6), and the menu item that carries its chord. Both ids are part of Jot's public surface.
@@ -41,13 +45,14 @@ joplin.plugins.register({ onStart: setupPlugin })
 
 /** setupPlugin *************************************************************************************************************************************
  * Runs everything that initializes the plugin. The settings come first (the toolbar gate reads one), then the commands, which the menu item and the *
- * toolbar button refer to by name.                                                                                                                 *
+ * toolbar button refer to by name, and last the typed trigger's content script and its message handler.                                           *
  ***************************************************************************************************************************************************/
 export async function setupPlugin(){
     await setupSettings()
     await setupCommands()
     await setupMenu()
     await setupToolbar()
+    await setupTrigger()
 }
 
 /** setupCommands ***********************************************************************************************************************************

@@ -11,10 +11,11 @@
  * notebook id, day start time) - travels in a <script type="application/json"> element, with every "<" written as < so no value can close it.  *
  * setHtml writes the markup through innerHTML, so the element is never executed, only read.                                                         *
  *                                                                                                                                                  *
- * THE IN THIS NOTE ROW (the selection route only, after the Due row and its picker): the buttons the host offers - Keep the text, Replace it with a *
- * link to the new note, and in the Markdown editor Add a link after it - drawn as radios in the Type toggle's pattern, with the choice in a hidden    *
- * inThisNote. The island carries the same list and the starting choice ({ choices, value }, null on every other route), so the markup and the        *
- * island never disagree about what is offered.                                                                                                      *
+ * THE IN THIS NOTE ROW (the selection and trigger routes, after the Due row and its picker): the buttons the host offers - on the selection route  *
+ * Keep the text, Replace it with a link to the new note, and in the Markdown editor Add a link after it; on the trigger route Remove ++ and Replace  *
+ * ++ with a link to the new note, the trigger printed - drawn as radios in the Type toggle's pattern, with the choice in a hidden inThisNote. Their  *
+ * labels come with them (inThisNoteLabels; the selection route's are formModel's SELECTION_LABELS). The island carries the same list and the        *
+ * starting choice ({ choices, value }, null on the plain routes), so the markup and the island never disagree about what is offered.              *
  *                                                                                                                                                  *
  * The picker section is Cockpit's set alarm dialog (src/ui/alarm/alarm.ts, openAlarmDialog), single to-do only: the YYYY-MM-DD and HH:MM inputs,   *
  * the two rows of quick buttons, the calendar and the two time columns, with the same ids and the same inline handlers, which formWebview.js        *
@@ -32,7 +33,7 @@ export interface FormValues {
     tags: string
     dueDate: string
     dueTime: string
-    // The In this note choice ("keep", "replace", "after"); "" on a route without the row.
+    // The In this note choice ("keep", "replace", "after" on the selection route, "remove", "link" on the trigger route); "" on a route without the row.
     inThisNote: string
 }
 
@@ -43,8 +44,10 @@ export interface FormView {
     dayStart: string
     mobile: boolean
     pickerOpen: boolean
-    // The In this note buttons to draw, in order (formModel.selectionChoices); empty or absent: no row.
+    // The In this note buttons to draw, in order (formModel.selectionChoices or triggerChoices); empty or absent: no row.
     inThisNoteChoices?: string[]
+    // Their labels by choice (formModel.triggerLabels on the trigger route); a choice without one shows its SELECTION_LABELS label.
+    inThisNoteLabels?: { [choice: string]: string }
 }
 
 /** Imports *****************************************************************************************************************************************/
@@ -86,7 +89,8 @@ export function buildFormHtml(view: FormView): string {
     const notebook = view.notebooks.find(item => item.id === values.notebookId)
     const hasDue = !!(String(values.dueDate || "").trim() || String(values.dueTime || "").trim())
     const choices: string[] = Array.isArray(view.inThisNoteChoices) ? view.inThisNoteChoices : []
-    const choice = choices.length ? FormModel.selectionAction(values.inThisNote, choices) : ""
+    const choice = choices.length ? FormModel.inThisNoteAction(values.inThisNote, choices) : ""
+    const labels: { [choice: string]: string } = view.inThisNoteLabels || {}
     const island = islandJson({
         notebooks: view.notebooks.map(item => ({ id: item.id, path: item.path })),
         tags: view.tags,
@@ -105,7 +109,7 @@ export function buildFormHtml(view: FormView): string {
     const choiceOption = (value: string) => {
         const selected = value === choice
         return `<button type="button" class="jot-choice-option${selected ? " -selected" : ""}" data-choice="${escapeHtml(value)}" role="radio"`
-            + ` aria-checked="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}">${escapeHtml(FormModel.SELECTION_LABELS[value] || value)}</button>`
+            + ` aria-checked="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}">${escapeHtml(labels[value] || FormModel.SELECTION_LABELS[value] || value)}</button>`
     }
     const inThisNoteRow = !choices.length ? "" : `
             <div class="jot-row jot-row-top" id="jotInThisNoteRow">

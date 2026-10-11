@@ -1,12 +1,19 @@
 /** README ******************************************************************************************************************************************
  * The host side of Jot's form (brief 4.1 to 4.4): openForm(route, presets) gathers what the form shows, opens the dialog, and applies the answer.   *
- * Create mode only for now: no typed trigger, no edit mode (phases 3 and 4 add them behind the same function).                                     *
+ * Create mode only for now (phase 4 adds edit mode behind the same function).                                                                     *
  *                                                                                                                                                  *
  * THE SELECTION ROUTE. openJot(route) is what the three commands run: it reads the editor's selection first (editorSelection.ts) and, when there is  *
  * one, opens the form on the 'selection' route, prefilled from it (formModel.splitSelection), with the In this note row; with none, the route it    *
  * was given, the plain form. After a create on that route the choice is applied to the editor while it still holds the note the selection came    *
  * from - after POST notes and the tags, BEFORE anything is opened (Create and open would switch the editor to the new note, and the edit would     *
  * land there) - and remembered in lastSelectionAction for next time.                                                                               *
+ *                                                                                                                                                  *
+ * THE TRIGGER ROUTE. openTriggerForm(trigger) is what the typed trigger's message runs (src/trigger.ts): the plain form with no prefill, plus the In *
+ * this note row with Remove ++ and Replace ++ with a link to the new note (the trigger printed), starting on lastTriggerAction. The edit is not      *
+ * made here: the content script makes it in the editor, as one transaction, once it has the answer this resolves ({ action: 'remove' }, { action:  *
+ * 'link', link } or { action: 'cancel' }), and the choice is remembered after the create. Create and open therefore does not open at once - the     *
+ * editor would switch to the new note before the content script's edit reached the note the trigger was typed in - but puts the new note's id in    *
+ * the answer (open); the content script makes its edit and then asks for the open (openTriggerNote), which opens that one id only, once.           *
  *                                                                                                                                                  *
  * Every decision is formModel.js's (planCreate and the rules under it), so this file is the I/O around it: the notebooks and tags read from the     *
  * data API, the dialog, the POST notes, the tags (reused by lower-cased title, created when missing, attached), and the open after Create and open. *
@@ -23,7 +30,9 @@
 /** Imports *****************************************************************************************************************************************/
 import joplin from "api"
 import { buildFormHtml, FormNotebook, FormValues } from "./formHtml"
-import { getDayStartTime, getDefaultType, getLastSelectionAction, getOpenTarget, OPEN_IN_WINDOW, setLastSelectionAction } from "../core/settings"
+import {
+    getDayStartTime, getDefaultType, getLastSelectionAction, getLastTriggerAction, getOpenTarget, OPEN_IN_WINDOW, setLastSelectionAction, setLastTriggerAction,
+} from "../core/settings"
 import { isMobile } from "../core/platform"
 import { applySelectionEdit, editorIsMarkdown, readSelectedText } from "./editorSelection"
 const FormModel = require("./formModel")
@@ -32,6 +41,8 @@ const FormModel = require("./formModel")
 export const FORM_DIALOG_ID = "jot.form"
 // The route of a form opened from highlighted text, whichever command opened it.
 export const SELECTION_ROUTE = "selection"
+// The route of a form opened by the typed trigger in the Markdown editor (the content script's message).
+export const TRIGGER_ROUTE = "trigger"
 export const FORM_BUTTONS = [
     { id: "ok", title: "Create" },
     { id: "openAfter", title: "Create and open" },
@@ -48,24 +59,54 @@ export const FORM_SCRIPTS = [
 
 /** Types *******************************************************************************************************************************************/
 // What a route or a caller can preset. The selection route presets the title and body split from the selection, and carries the selection itself
-// (Add a link after it writes it back); other plugins (type, notebookId, title, body) come in phase 4, through the same function.
+// (Add a link after it writes it back); the trigger route carries the trigger typed (printed in its In this note labels); other plugins (type,
+// notebookId, title, body) come in phase 4, through the same function.
 export interface FormPresets {
     type?: string
     title?: string
     body?: string
     notebookId?: string
     selection?: string
+    trigger?: string
 }
 
+// What the commands resolve (brief section 6).
 export interface FormOutcome {
     id: string
     opened: boolean
+}
+
+// What the content script gets back on the trigger route (formModel.triggerAnswer), with the id to open after its edit on Create and open.
+export interface TriggerAnswer {
+    action: string
+    link?: string
+    open?: string
+}
+
+// A create, as runForm reports it to the route that opened the form.
+interface Created {
+    id: string
+    opened: boolean
+    inThisNote: string | null
+    link: string
+    openLater: boolean
+}
+
+// The In this note row of one open: the buttons, their labels, the starting choice, and what the route needs to apply the choice.
+interface InThisNote {
+    choices: string[]
+    labels: { [choice: string]: string }
+    value: string
+    selection: string | null
+    trigger: string | null
 }
 
 /** Variable Setup **********************************************************************************************************************************/
 var formDialogPromise: Promise<string> | null = null
 // A second open while the form is up (the shortcut pressed twice) is ignored rather than replacing the markup under the user.
 var formIsOpen = false
+// The note created by Create and open on the trigger route, waiting for the content script to ask for its open (openTriggerNote).
+var triggerOpenPending: string | null = null
 
 /** getFormDialog ***********************************************************************************************************************************
  * The dialog handle, built once on the first open. Concurrent callers share the same build; a failed build is forgotten so the next open retries.  *
@@ -109,16 +150,71 @@ export async function openJot(route: string): Promise<FormOutcome | null> {
  * form already open).                                                                                                                              *
  ***************************************************************************************************************************************************/
 export async function openForm(route: string, presets: FormPresets = {}): Promise<FormOutcome | null> {
+    const created = await withFormOpen(() => runForm(route, presets || {}))
+    return created ? { id: created.id, opened: created.opened } : null
+}
+
+/** openTriggerForm *********************************************************************************************************************************
+ * The trigger route (brief 4.4): the form with no prefill and In this note offering Remove and Replace with a link, `trigger` printed in both. The  *
+ * answer is the content script's to apply: { action: 'remove' }, { action: 'link', link } (the link to the new note, as the selection route builds *
+ * it), or { action: 'cancel' } when nothing was created - Cancel, Escape, an empty Create, no notebook, or a form already open (one form at a time). *
+ * Create and open adds open: the new note's id, opened by openTriggerNote once the content script has made its edit.                               *
+ ***************************************************************************************************************************************************/
+export async function openTriggerForm(trigger: string): Promise<TriggerAnswer> {
+    const created = await withFormOpen(() => runForm(TRIGGER_ROUTE, { trigger: String(trigger || "") }))
+    if (!created) return FormModel.triggerAnswer(null)
+    const answer: TriggerAnswer = FormModel.triggerAnswer(created.inThisNote, created.link)
+    if (created.openLater){
+        triggerOpenPending = created.id
+        answer.open = created.id
+    }
+    return answer
+}
+
+/** openTriggerNote *********************************************************************************************************************************
+ * The second half of Create and open on the trigger route: the content script, its edit made, asks for the note to be opened. Only the note the    *
+ * last trigger form created and has not opened yet is opened, and only once; anything else is refused. Resolves whether it opened.                 *
+ ***************************************************************************************************************************************************/
+export async function openTriggerNote(noteId: unknown): Promise<boolean> {
+    if (typeof noteId !== "string" || !noteId || noteId !== triggerOpenPending) return false
+    triggerOpenPending = null
+    await openCreatedNote(noteId)
+    return true
+}
+
+/** withFormOpen ************************************************************************************************************************************
+ * Runs one form at a time: a call while the form is up resolves null at once, whatever route it came from.                                         *
+ ***************************************************************************************************************************************************/
+async function withFormOpen<T>(work: () => Promise<T>): Promise<T | null> {
     if (formIsOpen) return null
     formIsOpen = true
     try {
-        return await runForm(route, presets || {})
+        return await work()
     } finally {
         formIsOpen = false
     }
 }
 
-async function runForm(route: string, presets: FormPresets): Promise<FormOutcome | null> {
+/** inThisNoteFor ***********************************************************************************************************************************
+ * The In this note row of one open. The selection route: Keep, Replace (and Add after in the Markdown editor), starting on lastSelectionAction. The  *
+ * trigger route: Remove and Replace with a link, labelled with the trigger, starting on lastTriggerAction. Every other route: no row, and nothing is  *
+ * read.                                                                                                                                            *
+ ***************************************************************************************************************************************************/
+async function inThisNoteFor(route: string, presets: FormPresets): Promise<InThisNote> {
+    if (route === SELECTION_ROUTE && typeof presets.selection === "string"){
+        const choices: string[] = FormModel.selectionChoices(await editorIsMarkdown())
+        const value = FormModel.inThisNoteAction(await getLastSelectionAction(), choices)
+        return { choices, labels: FormModel.SELECTION_LABELS, value, selection: presets.selection, trigger: null }
+    }
+    if (route === TRIGGER_ROUTE && typeof presets.trigger === "string"){
+        const choices: string[] = FormModel.triggerChoices()
+        const value = FormModel.inThisNoteAction(await getLastTriggerAction(), choices)
+        return { choices, labels: FormModel.triggerLabels(presets.trigger), value, selection: null, trigger: presets.trigger }
+    }
+    return { choices: [], labels: {}, value: "", selection: null, trigger: null }
+}
+
+async function runForm(route: string, presets: FormPresets): Promise<Created | null> {
     const notebooks: FormNotebook[] = FormModel.buildNotebookPaths(await getAllFolders())
     if (!notebooks.length){
         await joplin.views.dialogs.showMessageBox(FormModel.NO_NOTEBOOK_MESSAGE)
@@ -129,10 +225,8 @@ async function runForm(route: string, presets: FormPresets): Promise<FormOutcome
     const dayStart = FormModel.dayStartText(await getDayStartTime())
     const notebookId = await currentNotebookId(notebooks, presets.notebookId)
     const mobile = await isMobile()
-    // The selection route's In this note row: the buttons the editor allows, starting on the choice remembered from last time.
-    const selection = route === SELECTION_ROUTE && typeof presets.selection === "string" ? presets.selection : null
-    const inThisNoteChoices: string[] = selection === null ? [] : FormModel.selectionChoices(await editorIsMarkdown())
-    const inThisNote = inThisNoteChoices.length ? FormModel.selectionAction(await getLastSelectionAction(), inThisNoteChoices) : ""
+    const row = await inThisNoteFor(route, presets)
+    const inThisNoteChoices = row.choices
 
     let values: FormValues = {
         type: defaultType,
@@ -142,13 +236,15 @@ async function runForm(route: string, presets: FormPresets): Promise<FormOutcome
         tags: "",
         dueDate: "",
         dueTime: "",
-        inThisNote: inThisNote,
+        inThisNote: row.value,
     }
     let pickerOpen = false
     const handle = await getFormDialog()
 
     for (;;){
-        await joplin.views.dialogs.setHtml(handle, buildFormHtml({ notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen, inThisNoteChoices }))
+        await joplin.views.dialogs.setHtml(handle, buildFormHtml({
+            notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen, inThisNoteChoices, inThisNoteLabels: row.labels,
+        }))
         const result = await joplin.views.dialogs.open(handle)
         const plan = FormModel.planCreate(result, { defaultType, dayStart, notebookId, inThisNoteChoices })
         if (plan.kind === "none" || plan.kind === "nothing") return null
@@ -159,7 +255,7 @@ async function runForm(route: string, presets: FormPresets): Promise<FormOutcome
             pickerOpen = true
             continue
         }
-        return await createNote(plan, selection)
+        return await createNote(plan, row)
     }
 }
 
@@ -196,20 +292,23 @@ async function selectedFolder(): Promise<any> {
 }
 
 /** createNote **************************************************************************************************************************************
- * Executes a 'create' plan: POST notes with the payload formModel built, the tags, then (the selection route) the In this note edit with the link   *
- * to the new note under its final title and the choice remembered, and last the open when the plan asks for one - last, because opening switches   *
- * the editor to the new note and the edit must reach the note the selection came from.                                                            *
+ * Executes a 'create' plan: POST notes with the payload formModel built, the tags, then the In this note choice, and last the open when the plan    *
+ * asks for one - last, because opening switches the editor to the new note and the edit must reach the note the form was opened from. The selection *
+ * route makes its edit here (the link to the new note under its final title) and remembers the choice. The trigger route only remembers it: its edit *
+ * is the content script's, made from the answer, so on Create and open the open waits for the content script too (openLater).                       *
  ***************************************************************************************************************************************************/
-async function createNote(plan: any, selection: string | null): Promise<FormOutcome> {
+async function createNote(plan: any, row: InThisNote): Promise<Created> {
     const note = await joplin.data.post(["notes"], null, plan.note)
     if (plan.tags.length) await attachTags(note.id, plan.tags)
-    if (plan.inThisNote && selection !== null){
-        const link = FormModel.noteLink(plan.note.title, note.id)
-        await applySelectionEdit(FormModel.selectionEdit(plan.inThisNote, selection, link))
+    const link: string = FormModel.noteLink(plan.note.title, note.id)
+    if (plan.inThisNote && row.selection !== null){
+        await applySelectionEdit(FormModel.selectionEdit(plan.inThisNote, row.selection, link))
         await setLastSelectionAction(plan.inThisNote)
     }
-    if (plan.open) await openCreatedNote(note.id)
-    return { id: note.id, opened: !!plan.open }
+    if (plan.inThisNote && row.trigger !== null) await setLastTriggerAction(plan.inThisNote)
+    const openLater = !!plan.open && row.trigger !== null
+    if (plan.open && !openLater) await openCreatedNote(note.id)
+    return { id: note.id, opened: !!plan.open, inThisNote: plan.inThisNote || null, link, openLater }
 }
 
 /** attachTags **************************************************************************************************************************************

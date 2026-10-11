@@ -120,6 +120,36 @@ export async function findJoplinMenuItem(
   }, spec);
 }
 
+/**
+ * Click an item of Joplin's application menu by its label (Cockpit's helper, unchanged): the first visible item
+ * whose label matches, at any depth. Reaches the native menu through `@electron/remote`, as findJoplinMenuItem does.
+ * Returns false when the item could not be found or remote is unavailable.
+ */
+export async function activateJoplinMenuItem(win: Page, label: RegExp): Promise<boolean> {
+  const pattern = { source: label.source, flags: label.flags };
+  try {
+    return await win.evaluate((spec) => {
+      const remote = (window as any).require('@electron/remote');
+      if (!remote || !remote.Menu) return false;
+      const wanted = new RegExp(spec.source, spec.flags);
+      const walk = (items: any[]): boolean => {
+        for (const item of items) {
+          if (item.visible !== false && wanted.test(String(item.label || ''))) {
+            item.click();
+            return true;
+          }
+          if (item.submenu && walk(item.submenu.items)) return true;
+        }
+        return false;
+      };
+      const menu = remote.Menu.getApplicationMenu();
+      return !!menu && walk(menu.items);
+    }, pattern);
+  } catch {
+    return false;
+  }
+}
+
 /** ----------------------------------------------------------------------------------------------
  * Notebooks and notes
  * ------------------------------------------------------------------------------------------- */
