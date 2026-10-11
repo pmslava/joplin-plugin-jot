@@ -1,0 +1,26 @@
+{
+	"manifest_version": 1,
+	"id": "io.github.pmslava.jot",
+	"app_min_version": "3.1",
+	"app_min_version_mobile": "3.3",
+	"platforms": [
+		"desktop",
+		"mobile"
+	],
+	"version": "0.1.0",
+	"name": "Jot",
+	"description": "Quick capture of a note or to-do without leaving the one you are in. A small form for the title, a line or two of text, the notebook, tags and the due date, opened by a shortcut, from highlighted text, or by typing ++ in the editor. The note is created where you say, and you stay where you were.",
+	"author": "pmslava",
+	"homepage_url": "https://github.com/pmslava/joplin-plugin-jot",
+	"repository_url": "https://github.com/pmslava/joplin-plugin-jot",
+	"keywords": [
+		"joplin",
+		"capture",
+		"quick",
+		"note",
+		"todo"
+	],
+	"categories": [
+		"productivity"
+	]
+}
