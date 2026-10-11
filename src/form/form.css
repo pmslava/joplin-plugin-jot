@@ -217,11 +217,16 @@ textarea.jot-input {
 .jot-suggest-row.-highlighted {
     background-color: var(--joplin-selected-color, rgba(127, 127, 127, 0.35));
 }
+/* The Text field's scrollbar too: the dialog's document has no scrollbar style of its own, so a native one would be a
+ * light strip in a dark theme once the Text runs past three lines. */
 .jot-suggest::-webkit-scrollbar,
+textarea.jot-input::-webkit-scrollbar,
 .alarm-time-scroll::-webkit-scrollbar { width: 5px; }
 .jot-suggest::-webkit-scrollbar-track,
+textarea.jot-input::-webkit-scrollbar-track,
 .alarm-time-scroll::-webkit-scrollbar-track { background: transparent; }
 .jot-suggest::-webkit-scrollbar-thumb,
+textarea.jot-input::-webkit-scrollbar-thumb,
 .alarm-time-scroll::-webkit-scrollbar-thumb {
     border-radius: 3px;
     background: var(--joplin-scrollbar-thumb-color, rgba(127, 127, 127, 0.4));

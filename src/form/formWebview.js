@@ -304,7 +304,8 @@ function showNotebookSuggestions(showAll){
     var pickedId = jotById('jotNotebookId').value
     var filter = showAll ? '' : input.value
     var rows = model().notebookSuggestions(jotData.notebooks, filter)
-    var highlight = 0
+    // A filter highlights the notebook typed in full when there is one (formModel.notebookHighlight), so Enter picks what was typed.
+    var highlight = showAll ? 0 : model().notebookHighlight(rows, filter)
     if (showAll){
         for (var index = 0; index < rows.length; index++) if (rows[index].id === pickedId) highlight = index
     }
@@ -316,7 +317,8 @@ function showTagSuggestions(){
     var caret = typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length
     var token = model().tagTokenAt(input.value, caret)
     var rows = model().tagSuggestions(jotData.tags, input.value, token)
-    openJotSuggest('tag', input, jotById('jotTagList'), rows, rows.length ? 0 : -1, token)
+    // The tag typed in full is highlighted when it is a row (formModel.suggestionHighlight), so Enter never swaps it for a longer one sorted above.
+    openJotSuggest('tag', input, jotById('jotTagList'), rows, model().suggestionHighlight(rows, token.value), token)
 }
 
 // The notebook field is "being filtered" while its text is not the picked notebook's path.

@@ -449,6 +449,34 @@
         return ((current + delta) % count + count) % count
     }
 
+    // The row a list highlights as it opens, which Enter picks: the one whose label is exactly what was typed (case and the spaces around it aside),
+    // else the first row; -1 with no rows. The rows match by substring and come in alphabetical order, so without this "work" typed in full would
+    // highlight "homework" above it, and Enter would pick a tag the user did not type.
+    function exactIndex(labels, typed){
+        var wanted = text(typed).trim().toLowerCase()
+        if (!wanted) return -1
+        for (var index = 0; index < labels.length; index++) if (text(labels[index]).trim().toLowerCase() === wanted) return index
+        return -1
+    }
+
+    function suggestionHighlight(labels, typed){
+        var list = Array.isArray(labels) ? labels : []
+        if (!list.length) return -1
+        var exact = exactIndex(list, typed)
+        return exact >= 0 ? exact : 0
+    }
+
+    // The same for the Notebook list, whose rows show paths: a path typed in full, else a notebook's own name (the path's last part) typed in full,
+    // so "projects" highlights "Work / Projects" rather than an "Old Projects" sorted above it; else the first row.
+    function notebookHighlight(notebooks, typed){
+        var list = Array.isArray(notebooks) ? notebooks : []
+        if (!list.length) return -1
+        var paths = list.map(function(item){ return text(item && item.path) })
+        var exact = exactIndex(paths, typed)
+        if (exact < 0) exact = exactIndex(paths.map(function(path){ return path.split(' / ').pop() }), typed)
+        return exact >= 0 ? exact : 0
+    }
+
     return {
         TODO: TODO,
         NOTE: NOTE,
@@ -493,5 +521,7 @@
         tagSuggestions: tagSuggestions,
         applyTagPick: applyTagPick,
         moveHighlight: moveHighlight,
+        suggestionHighlight: suggestionHighlight,
+        notebookHighlight: notebookHighlight,
     }
 })

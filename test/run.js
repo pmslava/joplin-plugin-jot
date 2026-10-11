@@ -1315,6 +1315,31 @@ async function main() {
         assert.strictEqual(FormModel.headingFor('note'), 'New note')
     })
 
+    await check('suggestion highlight: the tag or notebook typed in full is the row Enter picks, not a longer one sorted above it; else the first row', () => {
+        // Tags: the rows match by substring in alphabetical order, so "work" lists "homework" first.
+        const tags = ['homework', 'work', 'workshop']
+        const rows = FormModel.tagSuggestions(tags, 'work', FormModel.tagTokenAt('work', 4))
+        assert.deepStrictEqual(rows, ['homework', 'work', 'workshop'])
+        assert.strictEqual(FormModel.suggestionHighlight(rows, 'work'), 1, '"work" typed in full highlights work, not homework')
+        assert.strictEqual(FormModel.suggestionHighlight(rows, ' WORK '), 1, 'case and the spaces around it aside')
+        assert.strictEqual(FormModel.suggestionHighlight(rows, 'wor'), 0, 'a partial token highlights the first row, as before')
+        assert.strictEqual(FormModel.suggestionHighlight([], 'work'), -1, 'no rows, no highlight')
+        // Notebooks: a full path first, then a notebook's own name, then the first row.
+        const books = [{ id: 'old', path: 'Old Projects' }, { id: 'top', path: 'Projects' }, { id: 'sub', path: 'Work / Projects' }]
+        assert.strictEqual(FormModel.notebookHighlight(books, 'projects'), 1, 'the path typed in full wins')
+        assert.strictEqual(FormModel.notebookHighlight([books[0], books[2]], 'Projects'), 1, 'else the notebook whose own name was typed in full')
+        assert.strictEqual(FormModel.notebookHighlight(books, 'work / projects'), 2)
+        assert.strictEqual(FormModel.notebookHighlight(books, 'proj'), 0, 'a partial filter highlights the first row, as before')
+        assert.strictEqual(FormModel.notebookHighlight([], 'x'), -1)
+        // The glue opens each list on that highlight when it is typed into (the show-all of the arrow keys still starts on the picked notebook).
+        const glue = read('src/form/formWebview.js')
+        const tagGlue = glue.slice(glue.indexOf('function showTagSuggestions'), glue.indexOf('function notebookTextIsFilter'))
+        assert.ok(tagGlue.includes('model().suggestionHighlight(rows, token.value)'), 'the Tags list opens on the tag typed in full')
+        const bookGlue = glue.slice(glue.indexOf('function showNotebookSuggestions'), glue.indexOf('function showTagSuggestions'))
+        assert.ok(bookGlue.includes('showAll ? 0 : model().notebookHighlight(rows, filter)'), 'the Notebook list opens on the notebook typed in full')
+        assert.ok(bookGlue.includes('rows[index].id === pickedId'), 'the arrow keys\' full list still starts on the picked notebook')
+    })
+
     await check('formModel resolves window.SearchTokens at call time: before the script has run every row matches, after it the filter applies', () => {
         const vm = require('vm')
         const sandbox = { window: {} }
@@ -1362,6 +1387,26 @@ async function main() {
         assert.ok(/\.jot-suggest\s*\{\s*position:\s*absolute;/.test(css), 'the suggestion lists are absolutely positioned')
         assert.ok(/\.jot-form\s*\{\s*position:\s*relative;/.test(css), 'inside the form')
         assert.ok(!/cockpit-mobile|alarmExplain|alarmMode/.test(css), 'Cockpit\'s names and multi-to-do rows are not carried over')
+    })
+
+    await check('dialog CSS for dark themes: every scrollbar in the form is themed (the Text field\'s too), and no colour is a literal white or black', () => {
+        const css = read('src/form/form.css').replace(/\/\*[\s\S]*?\*\//g, '')
+        // Each scrollbar part is one rule whose selector list names the lists, the Text field and the time columns.
+        const ruleFor = (part) => {
+            const rule = new RegExp(`([^{}]*::-webkit-${part}(?![-\\w])[^{}]*)\\{([^}]*)\\}`).exec(css)
+            assert.ok(rule, `a ::-webkit-${part} rule`)
+            return { selectors: rule[1], body: rule[2] }
+        }
+        for (const part of ['scrollbar', 'scrollbar-track', 'scrollbar-thumb']) {
+            const rule = ruleFor(part)
+            for (const owner of ['.jot-suggest', 'textarea.jot-input', '.alarm-time-scroll']) {
+                assert.ok(rule.selectors.includes(`${owner}::-webkit-${part}`), `${owner} has the themed ${part}`)
+            }
+        }
+        assert.ok(ruleFor('scrollbar-thumb').body.includes('var(--joplin-scrollbar-thumb-color'), 'the thumb is the theme\'s colour')
+        // Colours come from --joplin-* variables or neutral greys that read on both; white appears only as a variable's fallback.
+        const literals = css.replace(/var\(--joplin-[a-z-]+,\s*#ffffff\)/g, '').match(/#fff\b|#ffffff\b|#000\b|#000000\b|\bwhite\b(?!-)|\bblack\b(?!-)/gi) || []
+        assert.deepStrictEqual(literals, [], 'no hard-coded white or black')
     })
 
     await check('dialog glue: Enter in a suggestion list is taken at the target phase (stopPropagation + preventDefault), Escape is the host\'s, globals at call time', () => {
