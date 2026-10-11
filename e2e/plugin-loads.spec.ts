@@ -14,8 +14,7 @@ import {
  *    default chord, which also proves jot.open is registered (the item shows the command's label),
  *  - and the profile's log shows onStart ran to its end and reports no error for the plugin.
  *
- * The command itself is not executed: its phase 0 placeholder opens a message box, which on desktop
- * is a native dialog that would block the window this harness drives.
+ * The command itself is not executed here: it opens the form, which form.spec.ts drives.
  */
 test.describe('Plugin loads', () => {
   let joplin: JoplinInstance;

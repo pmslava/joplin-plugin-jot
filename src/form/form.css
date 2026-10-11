@@ -1,0 +1,384 @@
+/* Jot's form dialog (brief 4.1, 4.2). One narrow column of 360px on both platforms; on mobile the column takes the
+ * screen's width instead. The picker section is Cockpit's set alarm dialog CSS (src/ui/alarm/alarm.ts, dialogCss),
+ * with its multi-to-do rows dropped and its .cockpit-mobile gate renamed .jot-mobile.
+ *
+ * The standing rules for a plugin dialog (brief section 9) bind this file: pixel sizes, no @media rule (a viewport
+ * query inside a webview whose size comes from its own content is circular, and it would also match Joplin's ~200px
+ * measuring pass), and suggestion lists taken out of the flow so they never change the dialog's size. */
+
+/* Joplin sizes a fit-to-content dialog from this wrapper's bounding rect, but the wrapper stretches to the iframe,
+ * which starts at a 200px minimum - so the wrapper's width is the one way to say how wide the dialog is. */
+#joplin-plugin-content {
+    width: 360px;
+}
+/* The narrow layout is gated on the jot-mobile class, which formWebview.js puts on the wrapper only when the markup
+ * carries the #jotPlatform marker (mobile), never on a viewport query (see above). */
+#joplin-plugin-content.jot-mobile {
+    width: calc(100vw - 16px);
+}
+
+/* Anything with a display rule of its own still hides when the script sets [hidden]. */
+.jot-form [hidden] {
+    display: none !important;
+}
+
+.jot-form {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 6px 4px;
+    width: 100%;
+    box-sizing: border-box;
+    font-size: var(--joplin-font-size, 13px);
+}
+.jot-heading {
+    font-weight: 600;
+}
+.jot-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    min-height: 26px;
+}
+.jot-row-top {
+    align-items: flex-start;
+}
+.jot-row-top .jot-label {
+    padding-top: 5px;
+}
+.jot-label {
+    flex: 0 0 64px;
+    opacity: 0.8;
+}
+.jot-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: 1.35;
+    color: inherit;
+    background: none;
+    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
+    border-radius: 3px;
+    outline: none;
+    box-sizing: border-box;
+}
+.jot-input:focus {
+    border-color: var(--joplin-focus-outline-color, var(--joplin-url-color, #2D6BDC));
+}
+textarea.jot-input {
+    /* Three lines, fixed: a draggable resize handle would make the centred dialog jump as it grows. */
+    height: 64px;
+    resize: none;
+}
+
+/* Type: two buttons that act as radios. */
+.jot-type {
+    display: inline-flex;
+    flex-direction: row;
+    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
+    border-radius: 3px;
+    overflow: hidden;
+}
+.jot-type-option {
+    padding: 3px 12px;
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+.jot-type-option + .jot-type-option {
+    border-left: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
+}
+.jot-type-option:hover {
+    background-color: rgba(127, 127, 127, 0.18);
+}
+.jot-type-option.-selected {
+    background-color: var(--joplin-selected-color, rgba(127, 127, 127, 0.35));
+    font-weight: 600;
+}
+.jot-type-option:focus-visible {
+    outline: 1px solid var(--joplin-focus-outline-color, var(--joplin-url-color, #2D6BDC));
+    outline-offset: -2px;
+}
+
+/* Due: the date and time as text, the bell, the No date link. Greyed for a note. */
+.jot-due-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.jot-bell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 26px;
+    padding: 0;
+    color: inherit;
+    background: none;
+    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
+    border-radius: 3px;
+    cursor: pointer;
+}
+.jot-bell:hover {
+    background-color: rgba(127, 127, 127, 0.18);
+}
+.jot-bell[aria-expanded="true"] {
+    border-color: var(--joplin-url-color, #2D6BDC);
+    background-color: var(--joplin-selected-color, rgba(127, 127, 127, 0.28));
+}
+.jot-link {
+    padding: 0;
+    font-family: inherit;
+    font-size: inherit;
+    color: var(--joplin-url-color, #2D6BDC);
+    background: none;
+    border: none;
+    text-decoration: underline;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.jot-form.-note .jot-due-row {
+    opacity: 0.45;
+}
+.jot-form.-note .jot-due-row button {
+    cursor: default;
+}
+
+/* The suggestion lists. Absolutely positioned inside the form (its fixed-size box), placed under or over their input
+ * by the script and capped to the room the form has there, so opening, filtering or closing one never changes the
+ * size Joplin measures. */
+.jot-suggest {
+    position: absolute;
+    z-index: 10;
+    overflow-y: auto;
+    box-sizing: border-box;
+    background-color: var(--joplin-background-color, #ffffff);
+    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
+    border-radius: 3px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.jot-suggest-row {
+    height: 24px;
+    padding: 3px 6px;
+    box-sizing: border-box;
+    line-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.jot-suggest-row:hover {
+    background-color: rgba(127, 127, 127, 0.18);
+}
+.jot-suggest-row.-highlighted {
+    background-color: var(--joplin-selected-color, rgba(127, 127, 127, 0.35));
+}
+.jot-suggest::-webkit-scrollbar,
+.alarm-time-scroll::-webkit-scrollbar { width: 5px; }
+.jot-suggest::-webkit-scrollbar-track,
+.alarm-time-scroll::-webkit-scrollbar-track { background: transparent; }
+.jot-suggest::-webkit-scrollbar-thumb,
+.alarm-time-scroll::-webkit-scrollbar-thumb {
+    border-radius: 3px;
+    background: var(--joplin-scrollbar-thumb-color, rgba(127, 127, 127, 0.4));
+}
+
+/* ---- The picker, folded under the Due row (Cockpit's dialogCss, single to-do) ---------------------------------- */
+
+.jot-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 2px;
+}
+/* Calendar on top, the hour/minute columns below it (mobile only, as in Cockpit) */
+.jot-mobile #alarmBody {
+    flex-direction: column;
+}
+.jot-mobile #alarmTimePanel {
+    justify-content: center;
+}
+.jot-mobile .alarm-time-col {
+    /* Compact (~4-5 rows) so a stacked column under the calendar does not make a very tall dialog; the hour and
+     * minute lists share the full width instead of 46px each. */
+    height: 132px;
+    flex: 1 1 0;
+    max-width: 120px;
+}
+/* The row holding the calendar (left) and the two time columns (right). flex-wrap: nowrap keeps them side by side
+ * under any width, and align-items: stretch makes the time panel (whose columns carry no intrinsic height) exactly as
+ * tall as the calendar. */
+#alarmBody {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 10px;
+    align-items: stretch;
+}
+#alarmFields {
+    display: flex;
+    flex-direction: row;
+    gap: 6px;
+}
+#alarmFields input {
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background: none;
+    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
+    border-radius: 3px;
+    outline: none;
+}
+#alarmFields input:focus {
+    border-color: var(--joplin-focus-outline-color, var(--joplin-url-color, #2D6BDC));
+}
+#alarmDate { width: 120px; }
+#alarmTime { width: 70px; }
+/* The grid's exact drawn height (nav 30 + its 4 margin + weekday row 22 + six week rows of 28 = 224px) is reserved,
+ * so the section has its final height before the script has drawn the grid. */
+#alarmCalendar {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 224px;
+}
+#alarmTimePanel {
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+    flex-shrink: 0;
+}
+/* Height-constraint wrapper: its only child, the scroller, is out of flow, so the column adds nothing to the row's
+ * height and stretches to the calendar's; the scroller fills it. */
+.alarm-time-col {
+    position: relative;
+    width: 46px;
+}
+.alarm-time-scroll {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+}
+.alarm-time-item {
+    display: block;
+    width: 100%;
+    padding: 3px 0;
+    text-align: center;
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.alarm-time-item:hover { background-color: rgba(127, 127, 127, 0.2); }
+.alarm-time-item.-selected {
+    background-color: var(--joplin-selected-color, rgba(127, 127, 127, 0.35));
+    font-weight: 600;
+}
+/* Two rows of quick buttons, each one line at a fixed height. In Jot's 360px column the buttons may shrink (and clip
+ * their label) rather than wrap, so a row never becomes two. */
+#alarmQuick {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.alarm-quick-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 4px;
+    height: 28px;
+    box-sizing: border-box;
+}
+#alarmQuick button {
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 3px 6px;
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background: none;
+    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
+    border-radius: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+#alarmQuick button:hover { background-color: rgba(127, 127, 127, 0.18); }
+.alarm-cal-nav {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    height: 30px;
+    box-sizing: border-box;
+}
+.alarm-cal-nav button {
+    min-width: 28px;
+    padding: 2px 8px;
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.alarm-cal-nav button:hover { background-color: rgba(127, 127, 127, 0.18); }
+.alarm-cal-title { font-weight: 600; }
+.alarm-cal-grid {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+.alarm-cal-grid th {
+    height: 22px;
+    box-sizing: border-box;
+    padding: 0;
+    font-size: 0.85em;
+    font-weight: 600;
+    opacity: 0.7;
+    text-align: center;
+}
+.alarm-cal-grid td {
+    height: 28px;
+    box-sizing: border-box;
+    padding: 1px;
+    text-align: center;
+}
+.alarm-cal-day {
+    display: block;
+    width: 100%;
+    height: 26px;
+    box-sizing: border-box;
+    padding: 0;
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.alarm-cal-day:hover { background-color: rgba(127, 127, 127, 0.2); }
+.alarm-cal-day.-outside { opacity: 0.35; }
+.alarm-cal-day.-today {
+    border-color: var(--joplin-url-color, #2D6BDC);
+    font-weight: 700;
+}
+.alarm-cal-day.-selected {
+    background-color: var(--joplin-selected-color, rgba(127, 127, 127, 0.35));
+}

@@ -1,5 +1,6 @@
 import { Page, expect } from '@playwright/test';
 import * as fs from 'fs';
+import * as http from 'http';
 import * as path from 'path';
 import { PLUGIN_ID } from './launch';
 
@@ -197,4 +198,56 @@ export async function executePluginCommand(win: Page, name: string, ...args: unk
   const result = await callPluginCommand(win, name, ...args);
   await win.waitForTimeout(SETTLE);
   return result;
+}
+
+/** ----------------------------------------------------------------------------------------------
+ * Joplin's own data API (the clipper server), to read back what a spec created
+ * ------------------------------------------------------------------------------------------- */
+
+/**
+ * A client for the data API of the throwaway profile's Joplin, the way Cockpit's type-flip spec reaches it.
+ * The profile presets the server (`launchJoplin({ settings: dataApiSettings(port, token) })`) on a port off
+ * Joplin's 41184 default, so a Joplin the developer happens to be running is never talked to by mistake.
+ */
+export function dataApiSettings(port: number, token: string): Record<string, unknown> {
+  return { 'clipperServer.autoStart': true, 'api.token': token, 'api.port': port };
+}
+
+export interface DataApi {
+  /** GET a data API path (without the token), parsed as JSON; throws on a status other than 200. */
+  get(apiPath: string): Promise<any>;
+  /** Resolves once the server answers /ping (it starts a moment after the window). */
+  ready(win: Page): Promise<void>;
+}
+
+export function dataApi(port: number, token: string): DataApi {
+  const request = (apiPath: string): Promise<{ status: number; text: string }> =>
+    new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: apiPath }, (response) => {
+        let text = '';
+        response.on('data', (chunk) => (text += chunk));
+        response.on('end', () => resolve({ status: response.statusCode || 0, text }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  return {
+    async get(apiPath: string) {
+      const separator = apiPath.includes('?') ? '&' : '?';
+      const response = await request(`${apiPath}${separator}token=${encodeURIComponent(token)}`);
+      if (response.status !== 200) throw new Error(`GET ${apiPath}: ${response.status} ${response.text}`);
+      return JSON.parse(response.text);
+    },
+    async ready(win: Page) {
+      for (let attempt = 0; attempt < 30; attempt++) {
+        try {
+          if ((await request('/ping')).status === 200) return;
+        } catch {
+          /* not up yet */
+        }
+        await win.waitForTimeout(1000);
+      }
+      throw new Error(`Joplin's data API never answered on 127.0.0.1:${port}`);
+    },
+  };
 }
