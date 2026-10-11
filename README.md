@@ -2,6 +2,8 @@
 
 Quick capture of a note or to-do without leaving the one you are in.
 
+<img src="docs/images/form-new-todo.png" width="428" alt="Jot's form in Joplin's dark theme: a new to-do with its title, text, notebook, tags and a due date">
+
 While you read or work in one note, Jot opens a small form for the title, a line or two of text, the notebook, tags and the due date, creates the note from it, and does not open it. You stay where you were. Joplin's own New note and New to-do create an empty note and open it, and Back lands at the top of the note you were reading; Jot exists so that never happens.
 
 0.1.0 is the first release. The desktop is tested; Android is not yet, see the known limits below.
@@ -14,13 +16,23 @@ In Joplin, Settings › Plugins › search for Jot and install it. Or download `
 
 - **Tools › Jot…**, with `Ctrl+Shift+J` as its shortcut on every platform (change it under Options › Keyboard Shortcuts).
 - **Jot from the selection…** in the editor's right-click menu. The first line of the highlighted text becomes the title and the rest the text. The shortcut does the same when text is highlighted.
+
+  <img src="docs/images/form-selection.png" width="833" alt="Two highlighted lines in the Markdown editor and the form opened from them, title and text prefilled, with the In this note row">
+
 - **Typing `++`** at the start of a line or after a space in the Markdown editor. The trigger is a setting; empty turns it off. It never fires inside a word (`C++`), on a paste, or twice for the same occurrence: cancel the form once and that `++` is left alone.
+
+  <img src="docs/images/form-trigger.png" width="833" alt="A line ending in ++ in the editor and the form it opened, offering to replace the ++ with a link or remove it">
+
 - **The Jot button** in the note toolbar, the feather icon.
 - **Edit with Jot…** in the note list's right-click menu: the same form prefilled with the note's title, type, notebook, tags and due date. Save writes only what you changed, and the note is never opened.
+
+  <img src="docs/images/form-edit.png" width="428" alt="The form in edit mode, headed Edit to-do, prefilled from an existing to-do, with Save and Cancel">
 
 ## The form
 
 Type (To-do or Note), Title, Text, Notebook, Tags and Due. The title is focused when the form opens, so typing a title and pressing Enter is all a capture needs. Notebook and Tags filter a list as you type, and Enter picks the highlighted row; the notebook starts on the one you are in. Due shows the date and time beside a bell; the bell unfolds Cockpit's date picker, the calendar, the time columns and the quick buttons, and every pick writes into the row at once. A to-do whose date is picked before its time starts at the day start time.
+
+<img src="docs/images/form-picker.png" width="428" alt="The form with the date picker unfolded under the Due row: the date and time, the quick buttons, the calendar and the time columns">
 
 **Create** writes the note and stays where you are. **Create and open** opens it, in the editor or in a new window by setting. A form with no title and no text creates nothing. An empty title with text takes the first line of the text as the title.
 

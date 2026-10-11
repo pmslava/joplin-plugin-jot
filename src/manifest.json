@@ -22,5 +22,27 @@
 	],
 	"categories": [
 		"productivity"
+	],
+	"screenshots": [
+		{
+			"src": "docs/images/form-new-todo.png",
+			"label": "The form for a new to-do: title, text, notebook, tags and a due date, opened by the shortcut over the note you are in"
+		},
+		{
+			"src": "docs/images/form-picker.png",
+			"label": "The date picker unfolded under the Due row, with its calendar, time columns and quick buttons"
+		},
+		{
+			"src": "docs/images/form-selection.png",
+			"label": "Two highlighted lines become the title and text of a new to-do, with the choice of what happens to them in the note"
+		},
+		{
+			"src": "docs/images/form-trigger.png",
+			"label": "Typing ++ in the Markdown editor opens the form, and the ++ becomes a link to the new note or is removed"
+		},
+		{
+			"src": "docs/images/form-edit.png",
+			"label": "Edit with Jot… changes an existing to-do's title, type, notebook, tags and due date without opening it"
+		}
 	]
 }

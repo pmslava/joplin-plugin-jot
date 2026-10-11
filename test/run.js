@@ -472,7 +472,8 @@ async function main() {
         assert.ok(manifest.description.startsWith('Quick capture of a note or to-do'), 'the brief\'s section 1 description')
         assert.strictEqual(manifest.repository_url, 'https://github.com/pmslava/joplin-plugin-jot')
         assert.strictEqual(manifest.homepage_url, manifest.repository_url)
-        assert.strictEqual(pkg.repository.url, manifest.repository_url)
+        // package.json carries the URL in the form npm normalises it to (npm pkg fix), the manifest the plain one.
+        assert.strictEqual(pkg.repository.url, `git+${manifest.repository_url}.git`)
         assert.strictEqual(pkg.name, 'joplin-plugin-jot')
         // The Joplin plugin repository finds packages on npm by this keyword.
         assert.ok(pkg.keywords.includes('joplin-plugin'), 'package.json keywords include joplin-plugin')
