@@ -1,4 +1,4 @@
-// Jot harness (phases 1 to 3).
+// Jot harness (phases 1 to 4).
 //
 // Runner and assertion frame follow joplin-plugin-cockpit's test/run.js: a tiny homemade runner over
 // Node's assert, a failures counter, a final "All checks passed" / "N failing check(s)" line, and
@@ -11,7 +11,8 @@
 // toolbar gate, and the form's host handler: the dialog, its markup, the POST payloads, the tags, the
 // opens; the selection route: the prefill, the In this note row and its memory, the edit in the editor and
 // its place in the call order; the typed trigger: the content script's registration and the plugin's handler
-// of its messages), every rule of the pure src/form/formModel.js and src/form/triggerRule.js, the content
+// of its messages; edit mode and jot.open's arguments: the second dialog, the prefill, the one PUT of what
+// changed, the tag diff, the note list's item), every rule of the pure src/form/formModel.js and src/form/triggerRule.js, the content
 // script itself run in Node against a real CodeMirror EditorState (a stand-in for the view: there is no DOM
 // here), the copies from Cockpit, the dialog glue's shape, and the sandbox proxy rule over every source file.
 
@@ -61,17 +62,21 @@ async function check(name, fn) {
 //   contentScriptsThrow          joplin.contentScripts.register rejects, as an app without content scripts would
 //   postThrows                   (path, body) => boolean: a data POST it answers true for rejects (recorded first), as Joplin refusing it would
 //   tagsGetThrows                GET tags rejects after this many successful reads (0: every read rejects)
+//   notes                        what GET notes/:id answers, by id (a copy; null answers null); an id not listed rejects, as Joplin's not-found does
+//   noteTags                     what GET notes/:id/tags pages through, by note id (none: no tags); noteTagsGetThrows makes that read reject
+//   putThrows, deleteThrows      (path, body) => boolean / (path) => boolean: a data PUT / DELETE it answers true for rejects (recorded first)
 // The content script's registration lands in state.contentScripts and its message handler in
 // state.contentScriptHandlers, by content script id.
 // Besides the per-kind records, `timeline` lists the plugin's writes and commands in the order they were made
-// ("POST notes", "POST tags/<id>/notes", "execute insertText", "setValue lastSelectionAction=replace", ...), so
-// a check can pin the order of the create, the tags, the edit in the editor and the open.
+// ("POST notes", "POST tags/<id>/notes", "PUT notes/<id>", "DELETE tags/<id>/notes/<noteId>", "execute insertText",
+// "setValue lastSelectionAction=replace", ...), so a check can pin the order of the create, the tags, the edit in
+// the editor and the open.
 function makeJoplin(options) {
     const state = {
         onStart: null, commands: [], menuItems: [], toolbarButtons: [], messageBoxes: [], warnings: [],
         sections: [], settingSpecs: {}, settingWrites: [], globalReads: [],
         dialogCreates: [], dialogScripts: [], dialogButtons: [], dialogHtml: [], dialogOpens: 0,
-        dataGets: [], dataPosts: [], executes: [], workspaceCalls: [], timeline: [],
+        dataGets: [], dataPosts: [], dataPuts: [], dataDeletes: [], executes: [], workspaceCalls: [], timeline: [],
         contentScripts: [], contentScriptHandlers: {},
     }
     const written = {}
@@ -135,7 +140,30 @@ function makeJoplin(options) {
                 }
                 if (pathParts.length === 1 && pathParts[0] === 'folders') return page(options.folders || [], query)
                 if (pathParts.length === 1 && pathParts[0] === 'tags') return page(tags, query)
+                if (pathParts.length === 2 && pathParts[0] === 'notes') {
+                    const notes = options.notes || {}
+                    if (!(pathParts[1] in notes)) throw new Error(`Not Found: notes/${pathParts[1]}`)
+                    return notes[pathParts[1]] ? { ...notes[pathParts[1]] } : notes[pathParts[1]]
+                }
+                if (pathParts.length === 3 && pathParts[0] === 'notes' && pathParts[2] === 'tags') {
+                    if (options.noteTagsGetThrows) throw new Error('cannot read the note\'s tags')
+                    return page(((options.noteTags || {})[pathParts[1]]) || [], query)
+                }
                 throw new Error(`unexpected GET ${pathParts.join('/')}`)
+            },
+            put: async (pathParts, query, body) => {
+                state.dataPuts.push({ path: pathParts, query, body })
+                state.timeline.push(`PUT ${pathParts.join('/')}`)
+                if (options.putThrows && options.putThrows(pathParts, body)) throw new Error(`refused: PUT ${pathParts.join('/')}`)
+                if (pathParts.length === 2 && pathParts[0] === 'notes') return { id: pathParts[1], ...body }
+                throw new Error(`unexpected PUT ${pathParts.join('/')}`)
+            },
+            delete: async (pathParts, query) => {
+                state.dataDeletes.push({ path: pathParts, query })
+                state.timeline.push(`DELETE ${pathParts.join('/')}`)
+                if (options.deleteThrows && options.deleteThrows(pathParts)) throw new Error(`refused: DELETE ${pathParts.join('/')}`)
+                if (pathParts.length === 4 && pathParts[0] === 'tags' && pathParts[2] === 'notes') return null
+                throw new Error(`unexpected DELETE ${pathParts.join('/')}`)
             },
             post: async (pathParts, query, body) => {
                 state.dataPosts.push({ path: pathParts, query, body })
@@ -275,6 +303,36 @@ function islandOf(html) {
 
 function notePosts(state) {
     return state.dataPosts.filter(post => post.path.length === 1 && post.path[0] === 'notes')
+}
+
+// ------------------------------------------------------------------------------------------ edit mode
+// A to-do in Work with two tags and a due date that carries seconds: the form shows minutes, so a Due left alone must not be rewritten.
+const EDIT_DUE = new Date(2026, 9, 14, 10, 30, 0, 0).getTime()
+const EDIT_NOTE = { id: 'nEdit', title: 'Call the bank', is_todo: 1, parent_id: 'fWork', todo_due: EDIT_DUE + 25_000, todo_completed: 0, body: 'never shown' }
+const EDIT_NOTE_TAGS = [{ id: 'tWork', title: 'work' }, { id: 'tUrgent', title: 'urgent' }]
+const EDIT_BASE = { notes: { nEdit: EDIT_NOTE }, noteTags: { nEdit: EDIT_NOTE_TAGS } }
+const EDIT_ARGS = { mode: 'edit', noteId: 'nEdit' }
+// The edit form's fields as its prefill shows them: Save on these is an unchanged form.
+const EDIT_UNCHANGED = { type: 'todo', title: 'Call the bank', notebookId: 'fWork', tags: 'urgent, work', dueDate: '2026-10-14', dueTime: '10:30' }
+
+// An edit-mode dialog result: the button's id and the "jot" form's fields - no body and no inThisNote, which edit mode does not draw - as the
+// prefill showed them unless `fields` says otherwise.
+function editResult(id, fields) {
+    return { id, formData: { jot: { ...EDIT_UNCHANGED, ...fields } } }
+}
+
+// Starts a bundle with the form and edit fixtures and `options`, runs `command` (jot.open unless given) once with `args` (edit mode on nEdit unless
+// given), and returns the stub's record and what the command resolved.
+async function editWith(options, args = EDIT_ARGS, command = 'jot.open') {
+    const state = await runBundle({ ...FORM_BASE, ...EDIT_BASE, ...options })
+    const registered = state.commands.find(item => item.name === command)
+    const outcome = await withWarnings(state, () => registered.execute(args))
+    return { state, outcome }
+}
+
+// The note reads edit mode made: GET notes/:id and GET notes/:id/tags, as "path fields" strings.
+function noteReads(state) {
+    return state.dataGets.filter(get => get.path[0] === 'notes').map(get => `${get.path.join('/')} ${get.query && get.query.fields ? get.query.fields.join(',') : ''}`)
 }
 
 // ------------------------------------------------------------------------------------------ the typed trigger
@@ -462,15 +520,16 @@ async function main() {
     // ---------------------------------------------------------------- the bundle against a stub
     const desktop = await runBundle({ versionInfo: DESKTOP })
 
-    await check('desktop: onStart registers jot.open, labelled Jot…, jot.fromSelection, labelled Jot from the selection…, and jot.button, labelled Jot', () => {
+    await check('desktop: onStart registers jot.open, labelled Jot…, jot.fromSelection, labelled Jot from the selection…, jot.button, labelled Jot, and jot.edit, labelled Edit with Jot…', () => {
         assert.deepStrictEqual(desktop.commands.map(command => [command.name, command.label]),
-            [['jot.open', 'Jot…'], ['jot.fromSelection', 'Jot from the selection…'], ['jot.button', 'Jot']])
+            [['jot.open', 'Jot…'], ['jot.fromSelection', 'Jot from the selection…'], ['jot.button', 'Jot'], ['jot.edit', 'Edit with Jot…']])
     })
 
-    await check('desktop: Tools > Jot… is one menu item with the Ctrl+Shift+J accelerator, and jot.fromSelection is in the editor\'s right-click menu', () => {
+    await check('desktop: Tools > Jot… is one menu item with the Ctrl+Shift+J accelerator, jot.fromSelection is in the editor\'s right-click menu, and jot.edit in the note list\'s', () => {
         assert.deepStrictEqual(desktop.menuItems, [
             { id: 'jot.open.menu', commandName: 'jot.open', location: 'tools', options: { accelerator: 'Ctrl+Shift+J' } },
             { id: 'jot.fromSelection.menu', commandName: 'jot.fromSelection', location: 'editorContextMenu', options: undefined },
+            { id: 'jot.edit.menu', commandName: 'jot.edit', location: 'noteListContextMenu', options: undefined },
         ])
         assert.deepStrictEqual(desktop.warnings, [])
     })
@@ -487,7 +546,7 @@ async function main() {
     const mobile = await runBundle({ versionInfo: MOBILE })
 
     await check('mobile: the commands are registered and no menu item is made', () => {
-        assert.deepStrictEqual(mobile.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button'])
+        assert.deepStrictEqual(mobile.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button', 'jot.edit'])
         assert.deepStrictEqual(mobile.menuItems, [])
         assert.deepStrictEqual(mobile.warnings, [])
     })
@@ -495,10 +554,11 @@ async function main() {
     const refused = await runBundle({ versionInfo: DESKTOP, menuItemsThrow: true })
 
     await check('an app that refuses the menu items still starts the plugin, with one console warning for each item', () => {
-        assert.deepStrictEqual(refused.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button'])
-        assert.strictEqual(refused.warnings.length, 2)
+        assert.deepStrictEqual(refused.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button', 'jot.edit'])
+        assert.strictEqual(refused.warnings.length, 3)
         assert.ok(refused.warnings[0].startsWith('Jot: could not add Tools > Jot…'), refused.warnings[0])
         assert.ok(refused.warnings[1].startsWith('Jot: could not add Jot from the selection… to the editor\'s right-click menu'), refused.warnings[1])
+        assert.ok(refused.warnings[2].startsWith('Jot: could not add Edit with Jot… to the note list\'s right-click menu'), refused.warnings[2])
     })
 
     await check('typed trigger: onStart registers src/contentScript.ts as a CodeMirror plugin (one file for desktop and mobile) and its message handler', () => {
@@ -514,7 +574,7 @@ async function main() {
 
     await check('typed trigger: an app that refuses the content script still starts the plugin, with one console warning', async () => {
         const state = await runBundle({ versionInfo: DESKTOP, contentScriptsThrow: true })
-        assert.deepStrictEqual(state.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button'])
+        assert.deepStrictEqual(state.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button', 'jot.edit'])
         assert.deepStrictEqual(state.toolbarButtons.length, 1)
         assert.strictEqual(state.warnings.length, 1)
         assert.ok(state.warnings[0].startsWith('Jot: could not add the typed trigger to the Markdown editor'), state.warnings[0])
@@ -558,10 +618,10 @@ async function main() {
         assert.deepStrictEqual(mobile.toolbarButtons, button)
     })
 
-    await check('toolbar gate: with showToolbarButton off no button is made, and the three commands are still registered', async () => {
+    await check('toolbar gate: with showToolbarButton off no button is made, and the four commands are still registered', async () => {
         const off = await runBundle({ versionInfo: DESKTOP, settings: { showToolbarButton: false } })
         assert.deepStrictEqual(off.toolbarButtons, [])
-        assert.deepStrictEqual(off.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button'])
+        assert.deepStrictEqual(off.commands.map(command => command.name), ['jot.open', 'jot.fromSelection', 'jot.button', 'jot.edit'])
         const offMobile = await runBundle({ versionInfo: MOBILE, settings: { showToolbarButton: false } })
         assert.deepStrictEqual(offMobile.toolbarButtons, [])
     })
@@ -1141,6 +1201,267 @@ async function main() {
         assert.strictEqual(state.dialogOpens, 1)
     })
 
+    // ---------------------------------------------------------------- edit mode and the command contract
+    await check('edit mode: jot.open { mode: \'edit\', noteId } reads the note (title, is_todo, parent_id, todo_due) and its tags, and builds a second handle, jot.edit, on its first open - the same five scripts, Save (id ok) and Cancel; nothing is run in the editor', async () => {
+        const { state, outcome } = await editWith({})
+        assert.strictEqual(outcome, null, 'Cancel (the stub\'s default answer) resolves null')
+        assert.deepStrictEqual(noteReads(state), ['notes/nEdit id,title,is_todo,parent_id,todo_due', 'notes/nEdit/tags id,title'])
+        assert.deepStrictEqual(state.dialogCreates, ['jot.edit'])
+        assert.deepStrictEqual(state.dialogScripts, ['./form/form.css', './form/alarmQuick.js', './form/searchTokens.js', './form/formModel.js', './form/formWebview.js'])
+        assert.deepStrictEqual(state.dialogButtons, [[{ id: 'ok', title: 'Save' }, { id: 'cancel', title: 'Cancel' }]])
+        assert.deepStrictEqual(state.executes, [], 'no selection read, no open, no focus move')
+        assert.deepStrictEqual(state.timeline, [])
+        // Both modes in one session: each handle built once, with its own buttons.
+        const both = await runBundle({ ...FORM_BASE, ...EDIT_BASE })
+        const open = both.commands.find(item => item.name === 'jot.open')
+        await withWarnings(both, async () => { await open.execute(); await open.execute(EDIT_ARGS); await open.execute(EDIT_ARGS); await open.execute() })
+        assert.deepStrictEqual(both.dialogCreates, ['jot.form', 'jot.edit'])
+        assert.deepStrictEqual(both.dialogButtons.map(buttons => buttons.map(button => button.title)), [['Create', 'Create and open', 'Cancel'], ['Save', 'Cancel']])
+        assert.strictEqual(both.dialogOpens, 4)
+    })
+
+    await check('edit mode prefill: "Edit to-do", the title, the notebook\'s path, the tags as a csv, the due date and time in local time (seconds dropped); Type, Title, Notebook, Tags and Due only - no Text, no In this note', async () => {
+        const { state } = await editWith({})
+        const html = state.dialogHtml[0]
+        assert.ok(html.includes('<strong id="jotHeading" class="jot-heading">Edit to-do</strong>'))
+        assert.ok(/data-type="todo" role="radio" aria-checked="true"/.test(html), 'the note\'s type')
+        assert.ok(/<input type="text" name="title"[^>]*value="Call the bank"[^>]*autofocus/.test(html), 'the title, focused')
+        assert.ok(/<input type="text" id="jotNotebook"[^>]*value="Work"/.test(html) && /name="notebookId" id="jotNotebookId" value="fWork"/.test(html), 'the notebook')
+        assert.ok(/<input type="text" name="tags"[^>]*value="urgent, work"/.test(html), 'the tags, sorted, as the csv the field edits')
+        assert.ok(/name="dueDate" id="jotDueDate" value="2026-10-14"/.test(html) && /name="dueTime" id="jotDueTime" value="10:30"/.test(html), 'the due, local')
+        assert.ok(html.includes('<span id="jotDueText" class="jot-due-text">2026-10-14 10:30</span>'))
+        assert.ok(/id="alarmDate"[^>]*value="2026-10-14"/.test(html) && /id="alarmTime"[^>]*value="10:30"/.test(html), 'the picker\'s inputs too')
+        for (const gone of ['name="body"', 'id="jotBody"', '>Text<', 'jotInThisNoteRow', 'name="inThisNote"']) assert.ok(!html.includes(gone), `${gone} is not in edit mode`)
+        const order = ['name="type"', 'name="title"', 'id="jotNotebook"', 'name="tags"', 'id="jotDueRow"', 'id="jotPicker"']
+        const positions = order.map(marker => html.indexOf(marker))
+        positions.forEach((position, index) => assert.ok(position >= 0, `${order[index]} is in the markup`))
+        assert.deepStrictEqual(positions.slice().sort((a, b) => a - b), positions)
+        for (const button of html.match(/<button\b[^>]*>/g) || []) assert.ok(button.includes('type="button"'), `every button is type="button": ${button}`)
+        const island = islandOf(html).data
+        assert.strictEqual(island.mode, 'edit', 'the island says edit, so the script keeps the Edit wording when Type is switched')
+        assert.deepStrictEqual(island.defaults, { type: 'todo', notebookId: 'fWork', dayStart: '09:00' })
+        assert.strictEqual(island.inThisNote, null)
+        assert.deepStrictEqual(island.tags, ['idea', 'urgent', 'work'], 'every tag is offered, as in create mode')
+        // A note: "Edit note", the Due row greyed and No date, even with a todo_due left on it (Joplin keeps none on a note).
+        const note = await editWith({ notes: { nEdit: { ...EDIT_NOTE, is_todo: 0 } } })
+        const noteHtml = note.state.dialogHtml[0]
+        assert.ok(noteHtml.includes('>Edit note</strong>') && noteHtml.includes('class="jot-form -note"'))
+        assert.ok(noteHtml.includes('<span id="jotDueText" class="jot-due-text">No date</span>') && /id="jotBell"[^>]*\bdisabled\b/.test(noteHtml))
+        // Create mode's island says create.
+        const created = await openFormWith({})
+        assert.strictEqual(islandOf(created.state.dialogHtml[0]).data.mode, 'create')
+    })
+
+    await check('edit mode: Save on an unchanged form makes no call at all and resolves { id, changed: [] } (the Due\'s seconds are not a change; nor are the title\'s spaces, the tags\' case and order, or an empty notebook id)', async () => {
+        const { state, outcome } = await editWith({ dialogResults: [editResult('ok', {})] })
+        assert.deepStrictEqual(outcome, { id: 'nEdit', changed: [] })
+        assert.deepStrictEqual(state.timeline, [], 'no PUT, no tag call, no command')
+        assert.deepStrictEqual([state.dataPuts, state.dataPosts, state.dataDeletes, state.executes, state.messageBoxes], [[], [], [], [], []])
+        const loose = await editWith({ dialogResults: [editResult('ok', { title: '  Call the bank ', tags: ' WORK,urgent, ', notebookId: '' })] })
+        assert.deepStrictEqual(loose.outcome, { id: 'nEdit', changed: [] })
+        assert.deepStrictEqual(loose.state.timeline, [])
+    })
+
+    await check('edit mode: each field changed alone is exactly one PUT notes/:id with only that field - title (trimmed), parent_id, todo_due (0 to clear); several are still one PUT', async () => {
+        const cases = [
+            [{ title: '  Call the bank today ' }, { title: 'Call the bank today' }, ['title']],
+            [{ title: '' }, { title: '' }, ['title']],
+            [{ notebookId: 'fProj' }, { parent_id: 'fProj' }, ['parent_id']],
+            [{ dueDate: '2026-10-15' }, { todo_due: new Date(2026, 9, 15, 10, 30).getTime() }, ['todo_due']],
+            [{ dueTime: '18:05' }, { todo_due: new Date(2026, 9, 14, 18, 5).getTime() }, ['todo_due']],
+            [{ dueDate: '', dueTime: '' }, { todo_due: 0 }, ['todo_due']],
+        ]
+        for (const [fields, body, changed] of cases) {
+            const { state, outcome } = await editWith({ dialogResults: [editResult('ok', fields)] })
+            assert.deepStrictEqual(state.dataPuts, [{ path: ['notes', 'nEdit'], query: null, body }], JSON.stringify(fields))
+            assert.deepStrictEqual(state.timeline, ['PUT notes/nEdit'], JSON.stringify(fields))
+            assert.deepStrictEqual(outcome, { id: 'nEdit', changed }, JSON.stringify(fields))
+        }
+        const several = await editWith({ dialogResults: [editResult('ok', { title: 'Renamed', notebookId: 'fHome', dueTime: '11:00' })] })
+        assert.deepStrictEqual(several.state.dataPuts.map(put => put.body), [{ title: 'Renamed', parent_id: 'fHome', todo_due: new Date(2026, 9, 14, 11, 0).getTime() }])
+        assert.deepStrictEqual(several.outcome, { id: 'nEdit', changed: ['title', 'parent_id', 'todo_due'] })
+    })
+
+    await check('edit mode: a type switch writes is_todo and clears todo_due and todo_completed in both directions (Joplin\'s changeNoteType); a switch to to-do takes the Due on top, in the same PUT', async () => {
+        const toNote = await editWith({ dialogResults: [editResult('ok', { type: 'note' })] })
+        assert.deepStrictEqual(toNote.state.dataPuts.map(put => put.body), [{ is_todo: 0, todo_due: 0, todo_completed: 0 }])
+        assert.deepStrictEqual(toNote.outcome, { id: 'nEdit', changed: ['is_todo', 'todo_due'] })
+        const unreadDue = await editWith({ dialogResults: [editResult('ok', { type: 'note', dueDate: 'soon' })] })
+        assert.deepStrictEqual(unreadDue.state.dataPuts.map(put => put.body), [{ is_todo: 0, todo_due: 0, todo_completed: 0 }], 'a note\'s Due is not read')
+        assert.deepStrictEqual(unreadDue.state.messageBoxes, [])
+        const asNote = { notes: { nEdit: { ...EDIT_NOTE, is_todo: 0, todo_due: 0 } } }
+        const toTodo = await editWith({ ...asNote, dialogResults: [editResult('ok', { type: 'todo', dueDate: '', dueTime: '' })] })
+        assert.deepStrictEqual(toTodo.state.dataPuts.map(put => put.body), [{ is_todo: 1, todo_due: 0, todo_completed: 0 }])
+        assert.deepStrictEqual(toTodo.outcome, { id: 'nEdit', changed: ['is_todo', 'todo_due'] })
+        const withDue = await editWith({ ...asNote, dialogResults: [editResult('ok', { type: 'todo', title: 'Now a task', dueDate: '2026-11-02', dueTime: '' })] })
+        assert.deepStrictEqual(withDue.state.dataPuts.map(put => put.body), [{ title: 'Now a task', is_todo: 1, todo_due: new Date(2026, 10, 2, 9, 0).getTime(), todo_completed: 0 }],
+            'the Due applied on top (a date alone at the day start time)')
+        assert.deepStrictEqual(withDue.outcome.changed, ['title', 'is_todo', 'todo_due'])
+        for (const run of [toNote, toTodo, withDue]) assert.deepStrictEqual(run.state.timeline, ['PUT notes/nEdit'])
+    })
+
+    await check('edit mode: the tag diff attaches an existing tag by its tagKey, creates and attaches a missing one, and detaches a removed one (DELETE tags/:id/notes/:noteId); tags alone make no PUT', async () => {
+        const { state, outcome } = await editWith({ dialogResults: [editResult('ok', { tags: 'work, Idea, brand new' })] })
+        assert.deepStrictEqual(state.timeline, ['POST tags/tIdea/notes', 'POST tags', 'POST tags/tag0001/notes', 'DELETE tags/tUrgent/notes/nEdit'])
+        assert.deepStrictEqual(state.dataPosts, [
+            { path: ['tags', 'tIdea', 'notes'], query: null, body: { id: 'nEdit' } },
+            { path: ['tags'], query: null, body: { title: 'brand new' } },
+            { path: ['tags', 'tag0001', 'notes'], query: null, body: { id: 'nEdit' } },
+        ])
+        assert.deepStrictEqual(state.dataDeletes, [{ path: ['tags', 'tUrgent', 'notes', 'nEdit'], query: undefined }])
+        assert.deepStrictEqual(state.dataPuts, [])
+        assert.deepStrictEqual(outcome, { id: 'nEdit', changed: ['tags'] })
+        // Removals only: the tag list is not read again. A field and the tags: the PUT first, then the tags.
+        const cleared = await editWith({ dialogResults: [editResult('ok', { title: 'Paid', tags: '' })] })
+        assert.deepStrictEqual(cleared.state.timeline, ['PUT notes/nEdit', 'DELETE tags/tUrgent/notes/nEdit', 'DELETE tags/tWork/notes/nEdit'])
+        assert.strictEqual(cleared.state.dataGets.filter(get => get.path.length === 1 && get.path[0] === 'tags').length, 2, 'only the form\'s two pages')
+        assert.deepStrictEqual(cleared.outcome, { id: 'nEdit', changed: ['title', 'tags'] })
+    })
+
+    await check('edit mode: a tag call that fails is a console warning and the next is tried - once the PUT is done nothing throws - and tags is reported only when a tag call went through; a refused PUT rejects before any tag call', async () => {
+        const failed = await editWith({
+            deleteThrows: (pathParts) => pathParts[1] === 'tUrgent',
+            dialogResults: [editResult('ok', { title: 'Renamed', tags: 'idea' })],
+        })
+        assert.deepStrictEqual(failed.state.timeline, ['PUT notes/nEdit', 'POST tags/tIdea/notes', 'DELETE tags/tUrgent/notes/nEdit', 'DELETE tags/tWork/notes/nEdit'])
+        assert.deepStrictEqual(failed.outcome, { id: 'nEdit', changed: ['title', 'tags'] }, 'the command resolves, it does not throw')
+        assert.deepStrictEqual(failed.state.warnings.filter(line => line.startsWith('Jot: could not remove the tag "urgent"; the note keeps it')).length, 1, failed.state.warnings.join(' | '))
+        assert.deepStrictEqual(failed.state.messageBoxes, [])
+        const noneDetached = await editWith({ deleteThrows: () => true, dialogResults: [editResult('ok', { title: 'Renamed again', tags: '' })] })
+        assert.deepStrictEqual(noneDetached.outcome, { id: 'nEdit', changed: ['title'] }, 'no tag call went through: tags is not reported')
+        assert.strictEqual(noneDetached.state.warnings.filter(line => line.startsWith('Jot: could not remove the tag')).length, 2)
+        const noneAttached = await editWith({ postThrows: (pathParts) => pathParts[0] === 'tags', dialogResults: [editResult('ok', { tags: 'urgent, work, idea' })] })
+        assert.deepStrictEqual(noneAttached.outcome, { id: 'nEdit', changed: [] })
+        assert.ok(noneAttached.state.warnings.some(line => line.startsWith('Jot: could not add the tag "idea"')), noneAttached.state.warnings.join(' | '))
+        const putRefused = await runBundle({ ...FORM_BASE, ...EDIT_BASE, putThrows: () => true, dialogResults: [editResult('ok', { title: 'x', tags: 'idea' })] })
+        const open = putRefused.commands.find(item => item.name === 'jot.open')
+        await withWarnings(putRefused, () => assert.rejects(() => open.execute(EDIT_ARGS), /refused: PUT notes\/nEdit/))
+        assert.deepStrictEqual(putRefused.timeline, ['PUT notes/nEdit'])
+    })
+
+    await check('edit mode: a note that no longer exists - GET notes/:id rejects or answers nothing, or its tags cannot be read - says "Jot: this note no longer exists." and resolves null, with no dialog; no note id at all is a console warning and null', async () => {
+        for (const options of [{ notes: {} }, { notes: { nEdit: null } }, { noteTagsGetThrows: true }]) {
+            const { state, outcome } = await editWith(options)
+            assert.strictEqual(outcome, null, JSON.stringify(options))
+            assert.deepStrictEqual(state.messageBoxes, ['Jot: this note no longer exists.'], JSON.stringify(options))
+            assert.deepStrictEqual([state.dialogCreates, state.dialogOpens, state.timeline], [[], 0, []], JSON.stringify(options))
+        }
+        for (const args of [{ mode: 'edit' }, { mode: 'edit', noteId: '' }, { mode: 'edit', noteId: 42 }]) {
+            const { state, outcome } = await editWith({}, args)
+            assert.strictEqual(outcome, null, JSON.stringify(args))
+            assert.deepStrictEqual([state.messageBoxes, state.dataGets.length, state.dialogOpens], [[], 0, 0], JSON.stringify(args))
+            assert.ok(state.warnings.some(line => line.startsWith('Jot: edit mode was asked for without a note id')), JSON.stringify(args))
+        }
+    })
+
+    await check('edit mode: Cancel, Escape and any other answer (Create and open is not one of its buttons) resolve null and write nothing, whatever was changed', async () => {
+        for (const id of ['cancel', 'close', 'openAfter', undefined]) {
+            const { state, outcome } = await editWith({ dialogResults: [editResult(id, { type: 'note', title: 'Changed', notebookId: 'fHome', tags: 'idea', dueDate: '' })] })
+            assert.strictEqual(outcome, null, `button ${id}`)
+            assert.deepStrictEqual([state.timeline, state.messageBoxes], [[], []], `button ${id}`)
+        }
+    })
+
+    await check('edit mode: an unreadable Due is refused with the brief\'s message; the form reopens in edit mode as typed with the picker unfolded, then saves only what changed', async () => {
+        const { state, outcome } = await editWith({
+            dialogResults: [editResult('ok', { title: 'Renamed', dueDate: '2026-02-31' }), editResult('ok', { title: 'Renamed', dueDate: '2026-02-28' })],
+        })
+        assert.deepStrictEqual(state.messageBoxes, ['Jot: the date must be YYYY-MM-DD and the time HH:MM (24-hour).'])
+        assert.strictEqual(state.dialogOpens, 2)
+        const again = state.dialogHtml[1]
+        assert.ok(again.includes('>Edit to-do</strong>') && !again.includes('name="body"'), 'still edit mode')
+        assert.ok(/name="title"[^>]*value="Renamed"/.test(again) && /name="dueDate" id="jotDueDate" value="2026-02-31"/.test(again), 'as typed')
+        assert.ok(/<div id="jotPicker" class="jot-picker">/.test(again) && islandOf(again).data.pickerOpen === true, 'the picker unfolded')
+        assert.deepStrictEqual(state.dataPuts.map(put => put.body), [{ title: 'Renamed', todo_due: new Date(2026, 1, 28, 10, 30).getTime() }])
+        assert.deepStrictEqual(outcome, { id: 'nEdit', changed: ['title', 'todo_due'] })
+    })
+
+    await check('jot.open { mode: \'new\' } honours each preset - type, title, body, notebookId - on the caller\'s route: no selection read, no In this note row; resolves { id, opened }; presets of the wrong shape are passed over', async () => {
+        const state = await runBundle({ ...FORM_BASE, executeResults: { selectedText: 'highlighted' },
+            dialogResults: [formResult('ok', { type: 'note', title: 'From Cockpit', body: 'line one\nline two', notebookId: 'fHome' })] })
+        const open = state.commands.find(item => item.name === 'jot.open')
+        const outcome = await withWarnings(state, () => open.execute({ mode: 'new', type: 'note', title: 'From Cockpit', body: 'line one\nline two', notebookId: 'fHome' }))
+        const html = state.dialogHtml[0]
+        assert.ok(html.includes('>New note</strong>') && /data-type="note" role="radio" aria-checked="true"/.test(html), 'type: the caller\'s note over the setting\'s to-do')
+        assert.ok(/<input type="text" name="title"[^>]*value="From Cockpit"/.test(html), 'title')
+        assert.ok(html.includes('>\nline one\nline two</textarea>'), 'body, in the Text')
+        assert.ok(/<input type="text" id="jotNotebook"[^>]*value="home"/.test(html) && islandOf(html).data.defaults.notebookId === 'fHome', 'notebookId, over the editor note\'s Work')
+        assert.ok(!html.includes('jotInThisNoteRow'), 'no In this note row, though text is highlighted')
+        assert.deepStrictEqual([state.executes, state.workspaceCalls, state.dialogCreates], [[], [], ['jot.form']], 'no selection read, no workspace read: the caller\'s notebook is known')
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: false })
+        assert.deepStrictEqual(notePosts(state).map(post => post.body), [{ parent_id: 'fHome', is_todo: 0, title: 'From Cockpit', body: 'line one\nline two', todo_due: 0 }])
+        // A to-do over a note setting; Create and open opens.
+        const todo = await runBundle({ ...FORM_BASE, settings: { defaultType: 'note' }, dialogResults: [formResult('openAfter', { title: 'Task' })] })
+        const opened = await withWarnings(todo, () => todo.commands.find(item => item.name === 'jot.open').execute({ mode: 'new', type: 'todo' }))
+        assert.ok(todo.dialogHtml[0].includes('>New to-do</strong>'))
+        assert.deepStrictEqual(opened, { id: opened.id, opened: true })
+        assert.deepStrictEqual(todo.executes, [{ name: 'openNote', args: [opened.id] }])
+        // Wrong shapes: the setting's type, empty fields, the current notebook.
+        const odd = await runBundle({ ...FORM_BASE })
+        await withWarnings(odd, () => odd.commands.find(item => item.name === 'jot.open').execute({ mode: 'new', type: 'Note', title: 42, body: { text: 'x' }, notebookId: 'gone' }))
+        const oddHtml = odd.dialogHtml[0]
+        assert.ok(oddHtml.includes('>New to-do</strong>'))
+        assert.ok(/<input type="text" name="title"[^>]*value=""/.test(oddHtml) && oddHtml.includes('>\n</textarea>'))
+        assert.strictEqual(islandOf(oddHtml).data.defaults.notebookId, 'fWork', 'an unknown notebook falls back to the editor note\'s')
+        assert.deepStrictEqual(odd.executes, [])
+    })
+
+    await check('jot.open with no argument, or one the contract does not know, is the shortcut\'s behaviour: the selection read first, then the plain form, or the selection route when text is highlighted', async () => {
+        for (const args of [undefined, null, {}, { mode: 'open' }, { mode: 'EDIT', noteId: 'nEdit' }, 'edit', ['nEdit'], 7]) {
+            const state = await runBundle({ ...FORM_BASE, ...EDIT_BASE })
+            const outcome = await withWarnings(state, () => state.commands.find(item => item.name === 'jot.open').execute(args))
+            assert.strictEqual(outcome, null, JSON.stringify(args))
+            assert.deepStrictEqual([state.executes, state.dialogCreates, noteReads(state)], [[READ_SELECTION], ['jot.form'], []], JSON.stringify(args))
+            assert.ok(state.dialogHtml[0].includes('>New to-do</strong>') && !state.dialogHtml[0].includes('jotInThisNoteRow'), JSON.stringify(args))
+        }
+        const selected = await runBundle({ ...FORM_BASE, executeResults: { selectedText: 'Buy milk\nsemi-skimmed' } })
+        await withWarnings(selected, () => selected.commands.find(item => item.name === 'jot.open').execute({ mode: 'unknown' }))
+        assert.ok(selected.dialogHtml[0].includes('jotInThisNoteRow') && /name="title"[^>]*value="Buy milk"/.test(selected.dialogHtml[0]), 'the selection route')
+    })
+
+    await check('jot.edit ("Edit with Jot…", in the note list\'s right-click menu on desktop) edits the first of the note ids it is given and ignores the rest; run with none (the palette), the editor\'s note; with no note, null', async () => {
+        const notes = { nEdit: EDIT_NOTE, nOther: { ...EDIT_NOTE, id: 'nOther', title: 'Other' } }
+        const { state, outcome } = await editWith({ notes, dialogResults: [editResult('ok', { title: 'Via the list' })] }, ['nEdit', 'nOther'], 'jot.edit')
+        assert.deepStrictEqual(noteReads(state), ['notes/nEdit id,title,is_todo,parent_id,todo_due', 'notes/nEdit/tags id,title'])
+        assert.ok(state.dialogHtml[0].includes('>Edit to-do</strong>') && /name="title"[^>]*value="Call the bank"/.test(state.dialogHtml[0]))
+        assert.deepStrictEqual(state.dataPuts, [{ path: ['notes', 'nEdit'], query: null, body: { title: 'Via the list' } }])
+        assert.deepStrictEqual(outcome, { id: 'nEdit', changed: ['title'] })
+        assert.deepStrictEqual([state.dialogCreates, state.executes], [['jot.edit'], []])
+        const palette = await runBundle({ ...FORM_BASE, ...EDIT_BASE, selectedNote: { id: 'nEdit', parent_id: 'fWork' } })
+        await withWarnings(palette, () => palette.commands.find(item => item.name === 'jot.edit').execute())
+        assert.deepStrictEqual(noteReads(palette)[0], 'notes/nEdit id,title,is_todo,parent_id,todo_due')
+        const none = await runBundle({ ...FORM_BASE, ...EDIT_BASE, selectedNote: null })
+        assert.strictEqual(await withWarnings(none, () => none.commands.find(item => item.name === 'jot.edit').execute([])), null)
+        assert.deepStrictEqual([noteReads(none), none.dialogOpens, none.messageBoxes], [[], 0, []])
+    })
+
+    await check('edit mode: one form at a time - while the edit form is up a create, another edit or jot.edit resolves null at once; while the create form is up an edit does', async () => {
+        let release
+        const held = new Promise(resolve => { release = resolve })
+        const state = await runBundle({ ...FORM_BASE, ...EDIT_BASE, openDialog: () => held })
+        const open = state.commands.find(item => item.name === 'jot.open')
+        const edit = state.commands.find(item => item.name === 'jot.edit')
+        const first = withWarnings(state, () => open.execute(EDIT_ARGS))
+        await tick(10)
+        assert.strictEqual(await open.execute(), null)
+        assert.strictEqual(await open.execute(EDIT_ARGS), null)
+        assert.strictEqual(await open.execute({ mode: 'new', title: 'x' }), null)
+        assert.strictEqual(await edit.execute(['nEdit']), null)
+        release(editResult('ok', { title: 'First' }))
+        assert.deepStrictEqual(await first, { id: 'nEdit', changed: ['title'] })
+        assert.strictEqual(state.dialogOpens, 1)
+        assert.strictEqual(noteReads(state).length, 2, 'the refused edits read nothing')
+        let releaseCreate
+        const heldCreate = new Promise(resolve => { releaseCreate = resolve })
+        const other = await runBundle({ ...FORM_BASE, ...EDIT_BASE, openDialog: () => heldCreate })
+        const creating = withWarnings(other, () => other.commands.find(item => item.name === 'jot.open').execute())
+        await tick(10)
+        assert.strictEqual(await other.commands.find(item => item.name === 'jot.open').execute(EDIT_ARGS), null)
+        releaseCreate({ id: 'cancel' })
+        assert.strictEqual(await creating, null)
+        assert.deepStrictEqual(noteReads(other), [])
+    })
+
     // ---------------------------------------------------------------- the pure model
     const FormModel = require(path.join(ROOT, 'src', 'form', 'formModel.js'))
     const TriggerRule = require(path.join(ROOT, 'src', 'form', 'triggerRule.js'))
@@ -1302,6 +1623,69 @@ async function main() {
         const options = { defaultType: 'todo', dayStart: '09:00', notebookId: 'fWork', inThisNoteChoices: ['remove', 'link'] }
         assert.strictEqual(FormModel.planCreate(formResult('ok', { title: 't', inThisNote: 'link' }), options).inThisNote, 'link')
         assert.strictEqual(FormModel.planCreate(formResult('ok', { title: 't', inThisNote: 'after' }), options).inThisNote, 'remove')
+    })
+
+    await check('formModel: the headings of both modes, and dueFields as the inverse of dueTimestamp (local YYYY-MM-DD and HH:MM, seconds dropped; no due is empty)', () => {
+        assert.deepStrictEqual(
+            [FormModel.headingFor('todo'), FormModel.headingFor('note'), FormModel.headingFor('note', 'create'), FormModel.headingFor('todo', 'edit'), FormModel.headingFor('note', 'edit'), FormModel.headingFor('x', 'edit')],
+            ['New to-do', 'New note', 'New note', 'Edit to-do', 'Edit note', 'Edit to-do'])
+        assert.deepStrictEqual(FormModel.dueFields(new Date(2026, 9, 14, 7, 5, 42, 123).getTime()), { date: '2026-10-14', time: '07:05' })
+        for (const at of [new Date(2026, 0, 1, 0, 0), new Date(2026, 11, 31, 23, 59), new Date(2028, 1, 29, 12, 30), new Date(2026, 2, 29, 2, 30)]) {
+            const fields = FormModel.dueFields(at.getTime())
+            assert.strictEqual(FormModel.dueTimestamp(fields.date, fields.time, '09:00'), at.getTime(), `the round trip of ${at.toString()}`)
+        }
+        for (const none of [0, null, undefined, '', -5, NaN, 'soon', Infinity]) assert.deepStrictEqual(FormModel.dueFields(none), { date: '', time: '' }, String(none))
+        assert.strictEqual(FormModel.NO_NOTE_MESSAGE, 'Jot: this note no longer exists.')
+    })
+
+    await check('formModel.openRequest and noteIdFrom: edit with its note id, new with only the presets of the right shape, anything else the default; a note list\'s ids give the first', () => {
+        assert.deepStrictEqual(FormModel.openRequest({ mode: 'edit', noteId: 'n1' }), { mode: 'edit', noteId: 'n1' })
+        assert.deepStrictEqual(FormModel.openRequest({ mode: 'edit' }), { mode: 'edit', noteId: '' })
+        assert.deepStrictEqual(FormModel.openRequest({ mode: 'new', type: 'note', title: 'T', body: 'B', notebookId: 'f1', extra: 1 }),
+            { mode: 'new', presets: { type: 'note', title: 'T', body: 'B', notebookId: 'f1' } })
+        assert.deepStrictEqual(FormModel.openRequest({ mode: 'new', type: 'todo', title: '', body: '' }), { mode: 'new', presets: { type: 'todo', title: '', body: '' } })
+        assert.deepStrictEqual(FormModel.openRequest({ mode: 'new' }), { mode: 'new', presets: {} })
+        assert.deepStrictEqual(FormModel.openRequest({ mode: 'new', type: 'task', title: 1, body: null, notebookId: '' }), { mode: 'new', presets: {} })
+        for (const args of [undefined, null, {}, [], 'edit', 3, { mode: 'Edit' }, { mode: 'open' }, [{ mode: 'edit', noteId: 'n1' }]]) {
+            assert.deepStrictEqual(FormModel.openRequest(args), { mode: 'default' }, JSON.stringify(args))
+        }
+        assert.deepStrictEqual([FormModel.noteIdFrom(['a', 'b']), FormModel.noteIdFrom('a'), FormModel.noteIdFrom([]), FormModel.noteIdFrom([3]), FormModel.noteIdFrom(null), FormModel.noteIdFrom({ id: 'a' })],
+            ['a', 'a', '', '', '', ''])
+    })
+
+    await check('formModel.editStart: the prefill from the note and its tags - type, title, notebook, the tags as a sorted csv, the Due fields of a to-do only, and each tag\'s id by its tagKey', () => {
+        const start = FormModel.editStart(EDIT_NOTE, [{ id: 'tU', title: 'urgent' }, { id: 'tW', title: 'Work' }, { id: 'tDup', title: 'WORK' }, { title: 'no id' }, null])
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(start)),
+            { type: 'todo', title: 'Call the bank', notebookId: 'fWork', tags: 'Work, urgent', dueDate: '2026-10-14', dueTime: '10:30', tagIds: { urgent: 'tU', work: 'tW' } })
+        assert.deepStrictEqual(FormModel.editStart({ ...EDIT_NOTE, is_todo: 0 }, []),
+            { type: 'note', title: 'Call the bank', notebookId: 'fWork', tags: '', dueDate: '', dueTime: '', tagIds: {} }, 'a note has no Due')
+        assert.deepStrictEqual(FormModel.editStart({ is_todo: 1, todo_due: 0 }, undefined), { type: 'todo', title: '', notebookId: '', tags: '', dueDate: '', dueTime: '', tagIds: {} })
+    })
+
+    await check('formModel.planEdit: none, invalidDue and save; the PUT holds only what changed (title trimmed, the Due at the minute), a type switch clears both fields, the tags are a diff of the two csvs', () => {
+        const start = FormModel.editStart(EDIT_NOTE, EDIT_NOTE_TAGS)
+        const options = { dayStart: '09:00' }
+        for (const result of [{ id: 'cancel' }, null, editResult('openAfter', { title: 'x' }), editResult(undefined, { title: 'x' })]) {
+            assert.deepStrictEqual(FormModel.planEdit(result, start, options), { kind: 'none' }, JSON.stringify(result))
+        }
+        assert.strictEqual(FormModel.planEdit(editResult('ok', { dueTime: '25:00' }), start, options).kind, 'invalidDue')
+        assert.strictEqual(FormModel.planEdit(editResult('ok', { dueDate: '', dueTime: '10:00' }), start, options).kind, 'invalidDue')
+        const same = FormModel.planEdit(editResult('ok', {}), start, options)
+        assert.deepStrictEqual([same.kind, same.put, same.changed, same.attach, same.detach], ['save', null, [], [], []])
+        const typeless = FormModel.planEdit({ id: 'ok', formData: { jot: { title: 'Call the bank', notebookId: 'fWork', tags: 'work,urgent', dueDate: '2026-10-14', dueTime: '10:30' } } }, start, options)
+        assert.deepStrictEqual(typeless.changed, [], 'a result without a type reads as the note\'s own')
+        const all = FormModel.planEdit(editResult('ok', { type: 'note', title: ' T ', notebookId: 'fHome', tags: 'work, new' }), start, options)
+        assert.deepStrictEqual(all.put, { title: 'T', parent_id: 'fHome', is_todo: 0, todo_due: 0, todo_completed: 0 })
+        assert.deepStrictEqual(all.changed, ['title', 'parent_id', 'is_todo', 'todo_due', 'tags'])
+        assert.deepStrictEqual([all.attach, all.detach], [['new'], [{ id: 'tUrgent', title: 'urgent' }]])
+        const minute = FormModel.planEdit(editResult('ok', { dueTime: '10:31' }), start, options)
+        assert.deepStrictEqual(minute.put, { todo_due: new Date(2026, 9, 14, 10, 31).getTime() }, 'a minute is a change; the seconds the note had are not')
+        // A tag whose title holds a comma: an untouched field is no change, and removing another tag removes that one only.
+        const comma = FormModel.editStart(EDIT_NOTE, [{ id: 'tAB', title: 'a, b' }, { id: 'tC', title: 'c' }])
+        assert.strictEqual(comma.tags, 'a, b, c')
+        assert.deepStrictEqual(FormModel.planEdit(editResult('ok', { tags: comma.tags }), comma, options).changed, [])
+        const dropC = FormModel.planEdit(editResult('ok', { tags: 'a, b' }), comma, options)
+        assert.deepStrictEqual([dropC.attach, dropC.detach, dropC.changed], [[], [{ id: 'tC', title: 'c' }], ['tags']])
     })
 
     await check('triggerRule: the trigger fires at a line start (the document\'s, or after a newline), after a space and after a tab - and never inside a word (C++, i++, a+++)', () => {
@@ -1593,6 +1977,59 @@ async function main() {
         assert.ok(/\.jot-choice\s*\{[^}]*flex-direction:\s*column;/.test(css), 'the long labels are stacked')
     })
 
+    await check('dialog glue: the heading follows the Type toggle in the wording of the island\'s mode - Edit to-do and Edit note in edit mode, New to-do and New note otherwise (run in a stand-in DOM)', () => {
+        const vm = require('vm')
+        // Just enough of a document for formWebview.js to load (no form yet) and for setJotType to run on one form.
+        const element = (id, attributes = {}) => {
+            const classes = new Set()
+            return {
+                id, value: '', textContent: '', disabled: false, attributes: { ...attributes },
+                classList: { toggle: (name, on) => { if (on) classes.add(name); else classes.delete(name) }, add: (name) => classes.add(name), contains: (name) => classes.has(name) },
+                setAttribute(name, value) { this.attributes[name] = String(value) },
+                getAttribute(name) { return name in this.attributes ? this.attributes[name] : null },
+                removeAttribute(name) { delete this.attributes[name] },
+                hasAttribute(name) { return name in this.attributes },
+            }
+        }
+        const run = (mode) => {
+            const options = [element('', { 'data-type': 'todo' }), element('', { 'data-type': 'note' })]
+            const form = element('jotForm')
+            form.querySelectorAll = () => options
+            const nodes = { jotType: element('jotType'), jotHeading: element('jotHeading'), jotBell: element('jotBell'), jotDueClear: element('jotDueClear'), jotPicker: element('jotPicker', { hidden: '' }), jotFormData: element('jotFormData') }
+            nodes.jotFormData.textContent = JSON.stringify({ mode, notebooks: [], tags: [], defaults: {}, pickerOpen: false, inThisNote: null })
+            let wired = false
+            const sandbox = {
+                document: {
+                    readyState: 'complete', documentElement: {},
+                    getElementById: (id) => nodes[id] || null,
+                    querySelector: () => (wired ? form : null),
+                },
+                MutationObserver: class { observe() {} },
+                setTimeout: () => 0,
+            }
+            sandbox.window = sandbox
+            sandbox.addEventListener = () => {}
+            vm.createContext(sandbox)
+            vm.runInContext(read('src/form/formModel.js'), sandbox)
+            vm.runInContext(read('src/form/formWebview.js'), sandbox)
+            wired = true
+            sandbox.jotData = sandbox.readJotData()
+            const headings = []
+            for (const type of ['todo', 'note', 'todo']) {
+                sandbox.setJotType(type)
+                headings.push(nodes.jotHeading.textContent)
+            }
+            return headings
+        }
+        assert.deepStrictEqual(run('edit'), ['Edit to-do', 'Edit note', 'Edit to-do'])
+        assert.deepStrictEqual(run('create'), ['New to-do', 'New note', 'New to-do'])
+        assert.deepStrictEqual(run(undefined), ['New to-do', 'New note', 'New to-do'], 'an island without a mode is create mode')
+        const glue = read('src/form/formWebview.js')
+        const init = glue.slice(glue.indexOf('function initJotFormIfNeeded'))
+        assert.ok(init.indexOf('jotData = readJotData()') >= 0 && init.indexOf('jotData = readJotData()') < init.indexOf("setJotType(jotById('jotType').value)"),
+            'each form reads its island before its first heading is set')
+    })
+
     // ---------------------------------------------------------------- the content script, in Node
     await check('content script: plugin() adds one update listener (and the compositionend handler) and asks for the trigger; a second mount on the same view is a no-op; CodeMirror 5 gets nothing', async () => {
         const editor = await mountTrigger('')
@@ -1772,6 +2209,15 @@ async function main() {
         assert.strictEqual(late.configs().length, 2, 'an empty answer (the handler not wired yet) is asked again')
         late.type(' ++')
         assert.deepStrictEqual(late.triggers().map(post => [post.from, post.to]), [[3, 5]])
+    })
+
+    await check('sandbox proxy: the audit below covers edit mode\'s calls - the note reads, PUT notes/:id, DELETE tags/:id/notes/:noteId, the note list\'s menu item - each a member read and called at once', () => {
+        const host = read('src/form/form.ts')
+        for (const call of ['joplin.data.get(["notes", noteId], { fields: EDIT_NOTE_FIELDS })', 'joplin.data.put(["notes", noteId], null, plan.put)',
+            'joplin.data.delete(["tags", tag.id, "notes", noteId])', 'joplin.data.get(path, { fields, page: page++ })']) {
+            assert.ok(host.includes(call), `src/form/form.ts calls ${call}`)
+        }
+        assert.ok(read('src/index.ts').includes('await joplin.views.menuItems.create(EDIT_MENU_ITEM, EDIT_COMMAND, MenuItemLocation.NoteListContextMenu)'))
     })
 
     // ---------------------------------------------------------------- the sandbox proxy rule

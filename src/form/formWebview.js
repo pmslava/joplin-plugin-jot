@@ -20,9 +20,9 @@
  ***************************************************************************************************************************************************/
 
 /** State of the current open **********************************************************************************************************************/
-// The island of the current open: { notebooks: [{id, path}], tags: [title], defaults: { type, notebookId, dayStart }, pickerOpen,
-// inThisNote: { choices, value, fallback } on the selection and trigger routes, else null }.
-var jotData = { notebooks: [], tags: [], defaults: {}, pickerOpen: false, inThisNote: null }
+// The island of the current open: { mode: 'create' | 'edit', notebooks: [{id, path}], tags: [title], defaults: { type, notebookId, dayStart },
+// pickerOpen, inThisNote: { choices, value, fallback } on the selection and trigger routes, else null }.
+var jotData = { mode: 'create', notebooks: [], tags: [], defaults: {}, pickerOpen: false, inThisNote: null }
 // The open suggestion list: { kind: 'notebook'|'tag', input, list, rows, highlight, token, moved }, or null when none is open. moved is whether the
 // user went to the highlighted row with the arrow keys (formModel.pickOnLeave).
 var jotSuggest = null
@@ -30,8 +30,8 @@ var jotSuggest = null
 /** State of the picker (ported from alarmWebview.js) **********************************************************************************************/
 // The first day of the month the calendar shows. Reset from the Due date every time the picker unfolds.
 var alarmCalendarAnchor = null
-// Whether the to-do already had a due time when the form opened (a reopen after a refused Create), and whether the user has set the time this
-// session. Together they decide preservedTime: a quick button keeps the shown clock time when either is true.
+// Whether the to-do already had a due time when the form opened (edit mode's prefill, or a reopen after a refused Create or Save), and whether
+// the user has set the time this session. Together they decide preservedTime: a quick button keeps the shown clock time when either is true.
 var alarmHadExistingAlarm = false
 var alarmTimeUserSet = false
 
@@ -58,6 +58,7 @@ function readJotData(){
         try { data = JSON.parse(node.textContent || '{}') || {} } catch (error){ data = {} }
     }
     return {
+        mode: data.mode === 'edit' ? 'edit' : 'create',
         notebooks: Array.isArray(data.notebooks) ? data.notebooks : [],
         tags: Array.isArray(data.tags) ? data.tags : [],
         defaults: data.defaults || {},
@@ -67,8 +68,9 @@ function readJotData(){
 }
 
 /** Type *******************************************************************************************************************************************
- * The two buttons act as radios (one tab stop, the selected one; the arrow keys switch). The hidden input carries the type, the heading follows it, *
- * and a note greys the Due row: its bell and No date are disabled and the picker folds. Nothing is cleared, so switching back restores the row.     *
+ * The two buttons act as radios (one tab stop, the selected one; the arrow keys switch). The hidden input carries the type, the heading follows it *
+ * in the wording of the form's mode (the island's: New to-do / New note, or Edit to-do / Edit note), and a note greys the Due row: its bell and No *
+ * date are disabled and the picker folds. Nothing is cleared, so switching back restores the row.                                                  *
  ***************************************************************************************************************************************************/
 function setJotType(type){
     var form = jotForm()
@@ -83,7 +85,7 @@ function setJotType(type){
         options[index].setAttribute('aria-checked', selected ? 'true' : 'false')
         options[index].setAttribute('tabindex', selected ? '0' : '-1')
     }
-    jotById('jotHeading').textContent = model().headingFor(normalized)
+    jotById('jotHeading').textContent = model().headingFor(normalized, jotData.mode)
     form.classList.toggle('-note', isNote)
     jotById('jotBell').disabled = isNote
     jotById('jotDueClear').disabled = isNote

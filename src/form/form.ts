@@ -1,6 +1,19 @@
 /** README ******************************************************************************************************************************************
- * The host side of Jot's form (brief 4.1 to 4.4): openForm(route, presets) gathers what the form shows, opens the dialog, and applies the answer.   *
- * Create mode only for now (phase 4 adds edit mode behind the same function).                                                                     *
+ * The host side of Jot's form (brief 4.1 to 4.5): openForm(route, presets) gathers what create mode shows, opens the dialog, and applies the       *
+ * answer; openEditForm(noteId) does the same for edit mode; runOpenCommand(args) reads jot.open's argument (brief section 6) and picks between     *
+ * them.                                                                                                                                            *
+ *                                                                                                                                                  *
+ * THE COMMAND CONTRACT (brief section 6, formModel.openRequest). jot.open with { mode: 'edit', noteId } is edit mode and resolves { id, changed }  *
+ * (the fields written, among title, parent_id, is_todo, todo_due, tags) or null; with { mode: 'new', type?, title?, body?, notebookId? } it is     *
+ * create mode on the caller's route, those presets in the fields, no selection read and no In this note row, and resolves { id, opened } or null;  *
+ * with no argument, or a mode the contract does not know, it is the shortcut's behaviour (openJot, the selection route when text is highlighted).  *
+ *                                                                                                                                                  *
+ * EDIT MODE (brief 4.5). The form prefilled from GET notes/:id (title, is_todo, parent_id, todo_due) and GET notes/:id/tags: Type, Title,          *
+ * Notebook, Tags and Due, no Text and no In this note, with Save and Cancel. Save writes only what changed (formModel.planEdit): one PUT notes/:id *
+ * with that subset - a type switch clears todo_due and todo_completed in both directions, as Joplin's changeNoteType does, the Due applied on top  *
+ * for a to-do - then the tag diff (attached as on Create, detached with DELETE tags/:id/notes/:noteId, each tag guarded on its own). An unchanged  *
+ * form writes nothing. The body and the completion are never read; nothing is opened and the focus is not moved. A note that cannot be read (gone, *
+ * or its tags unreadable) is "Jot: this note no longer exists." and null.                                                                          *
  *                                                                                                                                                  *
  * THE SELECTION ROUTE. openJot(route) is what the three commands run: it reads the editor's selection first (editorSelection.ts) and, when there is  *
  * one, opens the form on the 'selection' route, prefilled from it (formModel.splitSelection), with the In this note row; with none, the route it    *
@@ -19,10 +32,11 @@
  * data API, the dialog, the POST notes, the tags (reused as Joplin matches titles, created when missing, attached; never fatal), and the open.     *
  * Create opens nothing and moves no focus: the editor keeps its note.                                                                              *
  *                                                                                                                                                  *
- * THE DIALOG. One handle, created on the first open (Harper's lazy build: a failed build is not remembered, so the next open tries again), its      *
- * scripts added and its buttons set once. The buttons are Create (id ok, which Enter in a text input resolves to), Create and open (id openAfter)    *
- * and Cancel (id cancel, which Escape resolves to). The markup is set on every open (formHtml.ts); setHtml does not re-run the scripts, which wire   *
- * each new form themselves (formWebview.js).                                                                                                       *
+ * THE DIALOGS. Two handles, because buttons are set per handle: jot.form for create mode, with Create (id ok, which Enter in a text input          *
+ * resolves to), Create and open (id openAfter) and Cancel (id cancel, which Escape resolves to); jot.edit for edit mode, with Save (id ok) and     *
+ * Cancel. Each is created on its first open (Harper's lazy build: a failed build is not remembered, so the next open tries again), with the same   *
+ * scripts and stylesheet, and its buttons set once. The markup is set on every open (formHtml.ts, one builder for both modes); setHtml does not    *
+ * re-run the scripts, which wire each new form themselves (formWebview.js). One form at a time, whichever the mode.                                *
  *                                                                                                                                                  *
  * THE SANDBOX PROXY RULE: every joplin.* member is read and called in one expression.                                                              *
  ***************************************************************************************************************************************************/
@@ -39,15 +53,27 @@ const FormModel = require("./formModel")
 
 /** Constants ***************************************************************************************************************************************/
 export const FORM_DIALOG_ID = "jot.form"
+export const EDIT_DIALOG_ID = "jot.edit"
 // The route of a form opened from highlighted text, whichever command opened it.
 export const SELECTION_ROUTE = "selection"
 // The route of a form opened by the typed trigger in the Markdown editor (the content script's message).
 export const TRIGGER_ROUTE = "trigger"
+// The route of a form another plugin opened with jot.open { mode: 'new', ... }: the caller's presets, no selection read, no In this note row.
+export const CALLER_ROUTE = "caller"
 export const FORM_BUTTONS = [
     { id: "ok", title: "Create" },
     { id: "openAfter", title: "Create and open" },
     { id: "cancel", title: "Cancel" },
 ]
+export const EDIT_BUTTONS = [
+    { id: "ok", title: "Save" },
+    { id: "cancel", title: "Cancel" },
+]
+// The two handles and their buttons (buttons are set per handle).
+const CREATE_DIALOG: DialogSpec = { id: FORM_DIALOG_ID, buttons: FORM_BUTTONS }
+const EDIT_DIALOG: DialogSpec = { id: EDIT_DIALOG_ID, buttons: EDIT_BUTTONS }
+// What edit mode reads of the note (brief 4.5): never the body, never the completion.
+const EDIT_NOTE_FIELDS = ["id", "title", "is_todo", "parent_id", "todo_due"]
 // Loaded into the dialog in this order, though they run in the order they finish loading (hence the call-time globals in formWebview.js).
 export const FORM_SCRIPTS = [
     "./form/form.css",
@@ -59,8 +85,8 @@ export const FORM_SCRIPTS = [
 
 /** Types *******************************************************************************************************************************************/
 // What a route or a caller can preset. The selection route presets the title and body split from the selection, and carries the selection itself
-// (Add a link after it writes it back); the trigger route carries the trigger typed (printed in its In this note labels); other plugins (type,
-// notebookId, title, body) come in phase 4, through the same function.
+// (Add a link after it writes it back); the trigger route carries the trigger typed (printed in its In this note labels); another plugin's
+// jot.open { mode: 'new' } presets type, title, body and notebookId (formModel.openRequest keeps each only when it has the right shape).
 export interface FormPresets {
     type?: string
     title?: string
@@ -70,10 +96,21 @@ export interface FormPresets {
     trigger?: string
 }
 
-// What the commands resolve (brief section 6).
+// What the commands resolve in create mode (brief section 6).
 export interface FormOutcome {
     id: string
     opened: boolean
+}
+
+// What jot.open resolves in edit mode (brief section 6): the note and the fields written, in formModel.planEdit's order.
+export interface EditOutcome {
+    id: string
+    changed: string[]
+}
+
+interface DialogSpec {
+    id: string
+    buttons: { id: string, title: string }[]
 }
 
 // What the content script gets back on the trigger route (formModel.triggerAnswer), with the id to open after its edit on Create and open.
@@ -104,32 +141,45 @@ interface InThisNote {
 }
 
 /** Variable Setup **********************************************************************************************************************************/
-var formDialogPromise: Promise<string> | null = null
+// Each dialog handle's build, by dialog id, once started.
+var dialogPromises: { [id: string]: Promise<string> } = {}
 // A second open while the form is up (the shortcut pressed twice) is ignored rather than replacing the markup under the user.
 var formIsOpen = false
 // The note created by Create and open on the trigger route, waiting for the content script to ask for its open (openTriggerNote).
 var triggerOpenPending: string | null = null
 
-/** getFormDialog ***********************************************************************************************************************************
- * The dialog handle, built once on the first open. Concurrent callers share the same build; a failed build is forgotten so the next open retries.  *
+/** getDialog ***************************************************************************************************************************************
+ * A dialog handle (create mode's or edit mode's), built once on its first open, with the shared scripts and its own buttons. Concurrent callers    *
+ * share the same build; a failed build is forgotten so the next open retries.                                                                      *
  ***************************************************************************************************************************************************/
-function getFormDialog(): Promise<string> {
-    if (!formDialogPromise){
-        formDialogPromise = buildFormDialog().catch(error => {
-            formDialogPromise = null
+function getDialog(spec: DialogSpec): Promise<string> {
+    if (!dialogPromises[spec.id]){
+        dialogPromises[spec.id] = buildDialog(spec).catch(error => {
+            delete dialogPromises[spec.id]
             throw error
         })
     }
-    return formDialogPromise
+    return dialogPromises[spec.id]
 }
 
-async function buildFormDialog(): Promise<string> {
-    const handle = await joplin.views.dialogs.create(FORM_DIALOG_ID)
+async function buildDialog(spec: DialogSpec): Promise<string> {
+    const handle = await joplin.views.dialogs.create(spec.id)
     for (const script of FORM_SCRIPTS){
         await joplin.views.dialogs.addScript(handle, script)
     }
-    await joplin.views.dialogs.setButtons(handle, FORM_BUTTONS)
+    await joplin.views.dialogs.setButtons(handle, spec.buttons)
     return handle
+}
+
+/** runOpenCommand **********************************************************************************************************************************
+ * What jot.open runs with its argument (brief section 6, formModel.openRequest): { mode: 'edit', noteId } is edit mode; { mode: 'new', ... } is    *
+ * create mode on the caller's route with the presets kept; anything else (no argument from the menu, the shortcut or the palette) is openJot.      *
+ ***************************************************************************************************************************************************/
+export async function runOpenCommand(args?: unknown): Promise<FormOutcome | EditOutcome | null> {
+    const request = FormModel.openRequest(args)
+    if (request.mode === FormModel.EDIT_MODE) return openEditForm(request.noteId)
+    if (request.mode === "new") return openForm(CALLER_ROUTE, request.presets)
+    return openJot("menu")
 }
 
 /** openJot *****************************************************************************************************************************************
@@ -147,9 +197,10 @@ export async function openJot(route: string): Promise<FormOutcome | null> {
 
 /** openForm ****************************************************************************************************************************************
  * Opens the form and applies what the user chose. `route` names the way in ("menu" for Tools > Jot… and its shortcut, "contextMenu" for the        *
- * editor's right-click menu, "button" for the toolbar, all three the same plain form; "selection" for highlighted text, which adds the In this note  *
- * row). Resolves { id, opened } when a note was created, null when nothing was (Cancel, Escape, an empty Create, no notebook to create in, or a     *
- * form already open).                                                                                                                              *
+ * editor's right-click menu, "button" for the toolbar, "caller" for another plugin's { mode: 'new' }, all four the same plain form; "selection"    *
+ * for highlighted text, which adds the In this note row). `presets` fill the fields: type, title, body, notebookId (passed over when it is not a   *
+ * notebook). Resolves { id, opened } when a note was created, null when nothing was (Cancel, Escape, an empty Create, no notebook to create in, or *
+ * a form already open).                                                                                                                            *
  ***************************************************************************************************************************************************/
 export async function openForm(route: string, presets: FormPresets = {}): Promise<FormOutcome | null> {
     const created = await withFormOpen(() => runForm(route, presets || {}))
@@ -243,7 +294,7 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
         inThisNote: row.value,
     }
     let pickerOpen = false
-    const handle = await getFormDialog()
+    const handle = await getDialog(CREATE_DIALOG)
 
     for (;;){
         await joplin.views.dialogs.setHtml(handle, buildFormHtml({
@@ -322,9 +373,11 @@ async function createNote(plan: any, row: InThisNote): Promise<Created> {
  *                                                                                                                                                  *
  * NEVER THROWS. The note exists by now, and what follows it (the In this note edit, the open) must still run: a list that cannot be read is a       *
  * console warning (every tag is then created, or refused by Joplin as a duplicate), and a tag that cannot be created or attached is a console       *
- * warning and the next tag is tried.                                                                                                               *
+ * warning and the next tag is tried. Resolves how many were attached (edit mode reports tags as changed only when one was). Edit mode's Save       *
+ * attaches through here too, the note being an existing one.                                                                                       *
  ***************************************************************************************************************************************************/
-async function attachTags(noteId: string, titles: string[]): Promise<void> {
+async function attachTags(noteId: string, titles: string[]): Promise<number> {
+    let attached = 0
     const existing = new Map<string, string>()
     try {
         for (const tag of await getAllTags()){
@@ -343,10 +396,12 @@ async function attachTags(noteId: string, titles: string[]): Promise<void> {
                 existing.set(FormModel.tagKey(title), tagId)
             }
             await joplin.data.post(["tags", tagId, "notes"], null, { id: noteId })
+            attached++
         } catch (error) {
             console.warn(`Jot: could not add the tag "${title}"; the note is created without it`, error)
         }
     }
+    return attached
 }
 
 /** openCreatedNote *********************************************************************************************************************************
@@ -365,27 +420,139 @@ async function openCreatedNote(noteId: string): Promise<void> {
     await joplin.commands.execute("openNote", noteId)
 }
 
-/** getAllFolders / getAllTags **********************************************************************************************************************
- * Every notebook ({ id, title, parent_id }) and every tag ({ id, title }), walked page by page (the data API pages its lists). The API leaves the    *
- * trash out of both.                                                                                                                               *
+/** openEditFromCommand *****************************************************************************************************************************
+ * What jot.edit ("Edit with Jot…", the note list's right-click menu) runs. The menu passes the selected notes' ids (api/types.ts, noteIds:         *
+ * string[]); the first is edited and the rest ignored. Run with no argument (the command palette), it edits the note the editor holds.             *
+ ***************************************************************************************************************************************************/
+export async function openEditFromCommand(noteIds?: unknown): Promise<EditOutcome | null> {
+    let noteId: string = FormModel.noteIdFrom(noteIds)
+    if (!noteId && !formIsOpen){
+        const note = await selectedNote()
+        noteId = FormModel.noteIdFrom(note && note.id)
+    }
+    return openEditForm(noteId)
+}
+
+/** openEditForm ************************************************************************************************************************************
+ * Edit mode on one note (brief 4.5): resolves { id, changed } after Save (changed empty when nothing was), null on Cancel or Escape, when the note *
+ * cannot be read (with "Jot: this note no longer exists."), when no note id was given (a console warning), or while a form is already up.          *
+ ***************************************************************************************************************************************************/
+export async function openEditForm(noteId: unknown): Promise<EditOutcome | null> {
+    const id: string = FormModel.noteIdFrom(noteId)
+    if (!id){
+        console.warn("Jot: edit mode was asked for without a note id; nothing to edit")
+        return null
+    }
+    return withFormOpen(() => runEdit(id))
+}
+
+async function runEdit(noteId: string): Promise<EditOutcome | null> {
+    const loaded = await readNoteToEdit(noteId)
+    if (!loaded){
+        await joplin.views.dialogs.showMessageBox(FormModel.NO_NOTE_MESSAGE)
+        return null
+    }
+    const notebooks: FormNotebook[] = FormModel.buildNotebookPaths(await getAllFolders())
+    const tagTitles = (await getAllTags()).map(tag => tag.title).filter(title => !!title).sort()
+    const dayStart = FormModel.dayStartText(await getDayStartTime())
+    const mobile = await isMobile()
+    const start = FormModel.editStart(loaded.note, loaded.tags)
+
+    let values: FormValues = {
+        type: start.type,
+        title: start.title,
+        body: "",
+        notebookId: start.notebookId,
+        tags: start.tags,
+        dueDate: start.dueDate,
+        dueTime: start.dueTime,
+        inThisNote: "",
+    }
+    let pickerOpen = false
+    const handle = await getDialog(EDIT_DIALOG)
+
+    for (;;){
+        await joplin.views.dialogs.setHtml(handle, buildFormHtml({ mode: FormModel.EDIT_MODE, notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen }))
+        const result = await joplin.views.dialogs.open(handle)
+        const plan = FormModel.planEdit(result, start, { dayStart })
+        if (plan.kind === "none") return null
+        if (plan.kind === "invalidDue"){
+            // Refused as Create is: say why, then show the form again as typed, the picker unfolded on the value that was refused.
+            await joplin.views.dialogs.showMessageBox(FormModel.DUE_MESSAGE)
+            values = plan.values
+            pickerOpen = true
+            continue
+        }
+        return await saveEdit(noteId, plan)
+    }
+}
+
+/** readNoteToEdit **********************************************************************************************************************************
+ * The note's fields edit mode shows (EDIT_NOTE_FIELDS) and its tags, or null when the note cannot be read: a GET that throws (Joplin answers a     *
+ * missing note with a not-found error) or answers nothing, or a tag list that cannot be read (most likely the note went in between), since a form  *
+ * that showed no tags would show the note wrongly. A throw is a console warning.                                                                   *
+ ***************************************************************************************************************************************************/
+async function readNoteToEdit(noteId: string): Promise<{ note: any, tags: any[] } | null> {
+    try {
+        const note = await joplin.data.get(["notes", noteId], { fields: EDIT_NOTE_FIELDS })
+        if (!note || !note.id) return null
+        const tags = await getAllPages(["notes", noteId, "tags"], ["id", "title"])
+        return { note, tags }
+    } catch (error) {
+        console.warn(`Jot: could not read the note ${noteId} to edit it`, error)
+        return null
+    }
+}
+
+/** saveEdit ****************************************************************************************************************************************
+ * Executes a 'save' plan: the one PUT notes/:id when a note field changed, then the tag diff - attached as on Create (attachTags: reused by        *
+ * tagKey, created when missing), detached with DELETE tags/:id/notes/:noteId. A PUT that throws rejects the command, before any tag call; once it  *
+ * is done, no tag call throws. "tags" is reported as changed only when a tag call went through.                                                    *
+ ***************************************************************************************************************************************************/
+async function saveEdit(noteId: string, plan: any): Promise<EditOutcome> {
+    if (plan.put) await joplin.data.put(["notes", noteId], null, plan.put)
+    let tagCalls = 0
+    if (plan.attach.length) tagCalls += await attachTags(noteId, plan.attach)
+    if (plan.detach.length) tagCalls += await detachTags(noteId, plan.detach)
+    const changed: string[] = plan.changed.filter((field: string) => field !== "tags" || tagCalls > 0)
+    return { id: noteId, changed }
+}
+
+/** detachTags **************************************************************************************************************************************
+ * Removes each tag ({ id, title }, the ids the note had) from the note. NEVER THROWS, as attachTags: a tag that cannot be removed is a console     *
+ * warning and the next one is tried. Resolves how many were removed.                                                                               *
+ ***************************************************************************************************************************************************/
+async function detachTags(noteId: string, tags: { id: string, title: string }[]): Promise<number> {
+    let detached = 0
+    for (const tag of tags){
+        try {
+            await joplin.data.delete(["tags", tag.id, "notes", noteId])
+            detached++
+        } catch (error) {
+            console.warn(`Jot: could not remove the tag "${tag.title}"; the note keeps it`, error)
+        }
+    }
+    return detached
+}
+
+/** getAllFolders / getAllTags / getAllPages ********************************************************************************************************
+ * Every notebook ({ id, title, parent_id }), every tag ({ id, title }), and any other list (a note's tags), walked page by page (the data API      *
+ * pages its lists). The API leaves the trash out of the notebooks and the tags.                                                                    *
  ***************************************************************************************************************************************************/
 async function getAllFolders(): Promise<any[]> {
-    const items: any[] = []
-    let page = 1
-    let response: any
-    do {
-        response = await joplin.data.get(["folders"], { fields: ["id", "title", "parent_id"], page: page++ })
-        items.push(...((response && response.items) || []))
-    } while (response && response.has_more)
-    return items
+    return getAllPages(["folders"], ["id", "title", "parent_id"])
 }
 
 async function getAllTags(): Promise<any[]> {
+    return getAllPages(["tags"], ["id", "title"])
+}
+
+async function getAllPages(path: string[], fields: string[]): Promise<any[]> {
     const items: any[] = []
     let page = 1
     let response: any
     do {
-        response = await joplin.data.get(["tags"], { fields: ["id", "title"], page: page++ })
+        response = await joplin.data.get(path, { fields, page: page++ })
         items.push(...((response && response.items) || []))
     } while (response && response.has_more)
     return items

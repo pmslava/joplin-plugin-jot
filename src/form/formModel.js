@@ -7,7 +7,8 @@
  * and time validation (Cockpit's parseAlarmFields), the due timestamp, the day start time, the notebook paths and the notebook default order, the    *
  * create plan the host executes, the selection route's rules (the title/text split, the In this note choices and their default, the link, the edit  *
  * the host makes in the note), the trigger route's (its two choices, their labels with the trigger printed, the answer the content script gets),     *
- * and the small helpers the dialog's glue asks (the heading, the Due row text, the suggestion lists, the tag token).                                *
+ * edit mode's (the prefill from the note, the Due split back into its fields, the "what changed" diff that Save writes), the reading of jot.open's *
+ * arguments (brief section 6), and the small helpers the dialog's glue asks (the heading, the Due row text, the suggestion lists, the tag token).  *
  *                                                                                                                                                  *
  * CROSS-SCRIPT GLOBALS. In the dialog, window.SearchTokens (searchTokens.js, the filter rule copied from Cockpit) may load before or after this file:*
  * addScript appends plain <script> elements, which run in the order they finish loading. So it is looked up per call (searchTokens below), never     *
@@ -23,10 +24,14 @@
 
     var TODO = 'todo'
     var NOTE = 'note'
+    // The form's two modes (brief 4.1): create, and edit, which has its own headings and buttons and no Text and no In this note.
+    var CREATE_MODE = 'create'
+    var EDIT_MODE = 'edit'
 
     // The user-facing strings this module owns (brief section 5, word for word).
     var DUE_MESSAGE = 'Jot: the date must be YYYY-MM-DD and the time HH:MM (24-hour).'
     var NO_NOTEBOOK_MESSAGE = 'Jot: there is no notebook to create in.'
+    var NO_NOTE_MESSAGE = 'Jot: this note no longer exists.'
     var NO_DATE = 'No date'
     var DEFAULT_DAY_START = '09:00'
 
@@ -74,15 +79,18 @@
     }
 
     /** normalizeType / headingFor **********************************************************************************************************************
-     * The form's two types, and the title line that follows the Type toggle.                                                                            *
+     * The form's two types, and the title line that follows the Type toggle: New to-do and New note in create mode, Edit to-do and Edit note in edit   *
+     * mode (`mode` EDIT_MODE; anything else is create mode).                                                                                           *
      ***************************************************************************************************************************************************/
     function normalizeType(value, fallback){
         if (value === TODO || value === NOTE) return value
         return fallback === NOTE ? NOTE : TODO
     }
 
-    function headingFor(type){
-        return normalizeType(type) === NOTE ? 'New note' : 'New to-do'
+    function headingFor(type, mode){
+        var isNote = normalizeType(type) === NOTE
+        if (mode === EDIT_MODE) return isNote ? 'Edit note' : 'Edit to-do'
+        return isNote ? 'New note' : 'New to-do'
     }
 
     /** dialogAction ************************************************************************************************************************************
@@ -207,6 +215,19 @@
         return shown || NO_DATE
     }
 
+    /** dueFields ***************************************************************************************************************************************
+     * The inverse of dueTimestamp, for edit mode's prefill: a to-do's todo_due as the Due fields, the local YYYY-MM-DD and HH:MM ({ date, time }), or  *
+     * both empty when there is no due date (0, nothing, anything unreadable). The seconds are dropped, as the fields show minutes only; planEdit       *
+     * compares at the same resolution, so a due that is not touched is never rewritten.                                                                *
+     ***************************************************************************************************************************************************/
+    function dueFields(timestamp){
+        var value = Number(timestamp)
+        if (!(value > 0) || !Number.isFinite(value)) return { date: '', time: '' }
+        var date = new Date(value)
+        if (isNaN(date.getTime())) return { date: '', time: '' }
+        return { date: isoDate(date), time: pad2(date.getHours()) + ':' + pad2(date.getMinutes()) }
+    }
+
     /** dueAfterDatePick / dueAfterTimePick *************************************************************************************************************
      * What the Due fields become after a pick in the picker. A date picked before any time takes the day start time; a time picked before any date     *
      * lands today (the picker's calendar starts on today's month, as Cockpit's does).                                                                    *
@@ -312,6 +333,131 @@
                 todo_due: due,
             },
             tags: parseTagCsv(values.tags),
+        }
+    }
+
+    /** openRequest / noteIdFrom ************************************************************************************************************************
+     * What jot.open was asked for (brief section 6), from the command's one argument:                                                                  *
+     *   { mode: 'edit', noteId }   edit mode on that note (noteId '' when the argument carries no usable id).                                          *
+     *   { mode: 'new', presets }   create mode with the caller's presets, each kept only when it has the right shape: type 'todo' or 'note', title     *
+     *                              and body strings, notebookId a non-empty string (one that is not a notebook is passed over by the default order).   *
+     *   { mode: 'default' }        no argument, a mode the contract does not know, or anything that is not an object: the shortcut behaviour.          *
+     * noteIdFrom is the note id in a command argument: a non-empty string as it is, or the first of an array (the note list's context menu passes the  *
+     * selected notes' ids, and the first is taken); '' for anything else.                                                                              *
+     ***************************************************************************************************************************************************/
+    function noteIdFrom(value){
+        var first = Array.isArray(value) ? value[0] : value
+        return typeof first === 'string' ? first.trim() : ''
+    }
+
+    function openRequest(args){
+        var spec = args && typeof args === 'object' && !Array.isArray(args) ? args : null
+        if (spec && spec.mode === EDIT_MODE) return { mode: EDIT_MODE, noteId: noteIdFrom(spec.noteId) }
+        if (spec && spec.mode === 'new'){
+            var presets = {}
+            if (spec.type === TODO || spec.type === NOTE) presets.type = spec.type
+            if (typeof spec.title === 'string') presets.title = spec.title
+            if (typeof spec.body === 'string') presets.body = spec.body
+            if (typeof spec.notebookId === 'string' && spec.notebookId) presets.notebookId = spec.notebookId
+            return { mode: 'new', presets: presets }
+        }
+        return { mode: 'default' }
+    }
+
+    /** editStart ***************************************************************************************************************************************
+     * Edit mode's prefill (brief 4.5), from GET notes/:id (title, is_todo, parent_id, todo_due) and the note's tags (GET notes/:id/tags): the type,    *
+     * the title, the notebook, the tags as the Tags field's csv (sorted, one per tagKey), the Due fields (dueFields; a note shows No date, as Joplin   *
+     * keeps no due date on a note), and tagIds, each tag's id by its tagKey, which Save detaches by. It is also what planEdit compares the answer      *
+     * with.                                                                                                                                            *
+     ***************************************************************************************************************************************************/
+    function editStart(note, noteTags){
+        var source = note || {}
+        var type = Number(source.is_todo) ? TODO : NOTE
+        var due = type === TODO ? dueFields(source.todo_due) : { date: '', time: '' }
+        var titles = []
+        var tagIds = {}
+        var list = Array.isArray(noteTags) ? noteTags : []
+        for (var index = 0; index < list.length; index++){
+            var tag = list[index]
+            var key = tag && tag.id ? tagKey(tag.title) : ''
+            if (!key || tagIds[key]) continue
+            tagIds[key] = tag.id
+            titles.push(text(tag.title).trim())
+        }
+        titles.sort()
+        return {
+            type: type,
+            title: text(source.title),
+            notebookId: text(source.parent_id),
+            tags: titles.join(', '),
+            dueDate: due.date,
+            dueTime: due.time,
+            tagIds: tagIds,
+        }
+    }
+
+    /** planEdit ****************************************************************************************************************************************
+     * Turns an edit-mode dialog result into what Save writes (brief 4.2, 4.5), compared with `start` (editStart), with no I/O:                         *
+     *   { kind: 'none' }        Cancel, Escape, or anything but Save (id ok, which Enter in the Title also resolves to).                               *
+     *   { kind: 'invalidDue' }  the form is a to-do whose Due fields cannot be read: Save is refused with DUE_MESSAGE and the form reopens.            *
+     *   { kind: 'save', put, changed, attach, detach }                                                                                                 *
+     *       put     the ONE PUT notes/:id body, only what changed, or null when no note field did: title (trimmed, compared trimmed); parent_id; on a  *
+     *               type switch is_todo with todo_due and todo_completed both cleared, in both directions, as Joplin's own changeNoteType does, and    *
+     *               the Due applied on top when the new type is a to-do; todo_due alone (0 to clear) when a to-do's Due changed, compared at the       *
+     *               minute, so a due that was not touched is not rewritten. The body and the completion are never written otherwise.                   *
+     *       changed the fields written, in this order: title, parent_id, is_todo, todo_due (a type switch writes both), tags.                          *
+     *       attach  the tag titles (tagKeys) to add; detach the tags to remove, { id, title }, by the ids the note had.                                *
+     * A note that stays a note has no Due to read. The Tags field is compared as a csv on both sides, so an unchanged field is no change even when a   *
+     * tag's title holds a comma.                                                                                                                       *
+     ***************************************************************************************************************************************************/
+    function planEdit(result, start, options){
+        var settings = options || {}
+        var origin = start || {}
+        if (dialogAction(result) !== 'create') return { kind: 'none' }
+        var originType = normalizeType(origin.type)
+        var values = readFormValues(result && result.formData, originType)
+        var isTodo = values.type === TODO
+        var due = isTodo ? dueTimestamp(values.dueDate, values.dueTime, settings.dayStart) : 0
+        if (due === null) return { kind: 'invalidDue', values: values }
+        var put = {}
+        var changed = []
+        var title = values.title.trim()
+        if (title !== text(origin.title).trim()){
+            put.title = title
+            changed.push('title')
+        }
+        var notebookId = values.notebookId || text(origin.notebookId)
+        if (notebookId !== text(origin.notebookId)){
+            put.parent_id = notebookId
+            changed.push('parent_id')
+        }
+        if (values.type !== originType){
+            put.is_todo = isTodo ? 1 : 0
+            put.todo_due = due
+            put.todo_completed = 0
+            changed.push('is_todo', 'todo_due')
+        } else if (isTodo){
+            var before = dueTimestamp(origin.dueDate, origin.dueTime, settings.dayStart)
+            if (due !== (before === null ? 0 : before)){
+                put.todo_due = due
+                changed.push('todo_due')
+            }
+        }
+        var wanted = parseTagCsv(values.tags)
+        var had = parseTagCsv(origin.tags)
+        var tagIds = origin.tagIds || {}
+        var attach = wanted.filter(function(key){ return had.indexOf(key) < 0 })
+        var detach = had
+            .filter(function(key){ return wanted.indexOf(key) < 0 && !!tagIds[key] })
+            .map(function(key){ return { id: tagIds[key], title: key } })
+        if (attach.length || detach.length) changed.push('tags')
+        return {
+            kind: 'save',
+            values: values,
+            put: Object.keys(put).length ? put : null,
+            changed: changed,
+            attach: attach,
+            detach: detach,
         }
     }
 
@@ -524,8 +670,11 @@
     return {
         TODO: TODO,
         NOTE: NOTE,
+        CREATE_MODE: CREATE_MODE,
+        EDIT_MODE: EDIT_MODE,
         DUE_MESSAGE: DUE_MESSAGE,
         NO_NOTEBOOK_MESSAGE: NO_NOTEBOOK_MESSAGE,
+        NO_NOTE_MESSAGE: NO_NOTE_MESSAGE,
         NO_DATE: NO_DATE,
         DEFAULT_DAY_START: DEFAULT_DAY_START,
         KEEP: KEEP,
@@ -549,11 +698,16 @@
         dayStartText: dayStartText,
         dueTimestamp: dueTimestamp,
         dueText: dueText,
+        dueFields: dueFields,
         dueAfterDatePick: dueAfterDatePick,
         dueAfterTimePick: dueAfterTimePick,
         buildNotebookPaths: buildNotebookPaths,
         defaultNotebookId: defaultNotebookId,
         planCreate: planCreate,
+        openRequest: openRequest,
+        noteIdFrom: noteIdFrom,
+        editStart: editStart,
+        planEdit: planEdit,
         splitSelection: splitSelection,
         selectionChoices: selectionChoices,
         inThisNoteAction: inThisNoteAction,

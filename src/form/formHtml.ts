@@ -17,6 +17,10 @@
  * labels come with them (inThisNoteLabels; the selection route's are formModel's SELECTION_LABELS). The island carries the same list and the        *
  * starting choice with the route's default ({ choices, value, fallback }, null on the plain routes), so the markup and the island never disagree.   *
  *                                                                                                                                                  *
+ * EDIT MODE (view.mode "edit", brief 4.5) is the same form for an existing note: the heading says Edit to-do or Edit note, and there is no Text    *
+ * and no In this note row, so Type, Title, Notebook, Tags and Due remain. The island carries the mode, so the script's heading follows the Type    *
+ * toggle in the edit wording.                                                                                                                      *
+ *                                                                                                                                                  *
  * The picker section is Cockpit's set alarm dialog (src/ui/alarm/alarm.ts, openAlarmDialog), single to-do only: the YYYY-MM-DD and HH:MM inputs,   *
  * the two rows of quick buttons, the calendar and the two time columns, with the same ids and the same inline handlers, which formWebview.js        *
  * defines (ported from Cockpit's alarmWebview.js). Its inputs carry no name: the Due row's hidden dueDate and dueTime are the values the form sends. *
@@ -38,6 +42,8 @@ export interface FormValues {
 }
 
 export interface FormView {
+    // "edit" for edit mode (formModel.EDIT_MODE): the Edit headings, no Text, no In this note. Anything else, or absent, is create mode.
+    mode?: string
     notebooks: FormNotebook[]
     tags: string[]
     values: FormValues
@@ -83,20 +89,24 @@ export function islandJson(data: unknown): string {
 }
 
 /** buildFormHtml ***********************************************************************************************************************************
- * The whole dialog markup for one open. `values` are the fields' starting values: the defaults on a fresh open, or what the user had typed when    *
- * the form is reopened after a refused Create (then `pickerOpen` shows the picker, so the date that was refused is in view).                        *
+ * The whole dialog markup for one open. `values` are the fields' starting values: the defaults on a fresh open (in edit mode, the note's), or      *
+ * what the user had typed when the form is reopened after a refused Create or Save (then `pickerOpen` shows the picker, so the date that was       *
+ * refused is in view).                                                                                                                             *
  ***************************************************************************************************************************************************/
 export function buildFormHtml(view: FormView): string {
     const values = view.values
+    const editing = view.mode === FormModel.EDIT_MODE
+    const mode = editing ? FormModel.EDIT_MODE : FormModel.CREATE_MODE
     const type = FormModel.normalizeType(values.type)
     const isNote = type === FormModel.NOTE
     const notebook = view.notebooks.find(item => item.id === values.notebookId)
     const hasDue = !!(String(values.dueDate || "").trim() || String(values.dueTime || "").trim())
-    const choices: string[] = Array.isArray(view.inThisNoteChoices) ? view.inThisNoteChoices : []
+    const choices: string[] = !editing && Array.isArray(view.inThisNoteChoices) ? view.inThisNoteChoices : []
     const fallback = choices.length ? FormModel.inThisNoteAction(view.inThisNoteDefault, choices) : ""
     const choice = choices.length ? FormModel.inThisNoteAction(values.inThisNote, choices, fallback) : ""
     const labels: { [choice: string]: string } = view.inThisNoteLabels || {}
     const island = islandJson({
+        mode: mode,
         notebooks: view.notebooks.map(item => ({ id: item.id, path: item.path })),
         tags: view.tags,
         defaults: { type: type, notebookId: values.notebookId, dayStart: view.dayStart },
@@ -126,12 +136,17 @@ export function buildFormHtml(view: FormView): string {
             </div>`
     const textInput = 'autocomplete="off" autocorrect="off" autocapitalize="off"'
     // The textarea's content starts with a newline because the HTML parser drops one there: a Text that itself starts with an empty line keeps it.
+    const textRow = editing ? "" : `
+            <div class="jot-row jot-row-top">
+                <label class="jot-label" for="jotBody">Text</label>
+                <textarea name="body" id="jotBody" class="jot-input" rows="3" autocomplete="off">\n${escapeHtml(values.body)}</textarea>
+            </div>`
 
     return `
         ${platformMarker}
         <script type="application/json" id="jotFormData">${island}</script>
         <form name="jot" id="jotForm" class="jot-form${isNote ? " -note" : ""}" autocomplete="off">
-            <strong id="jotHeading" class="jot-heading">${escapeHtml(FormModel.headingFor(type))}</strong>
+            <strong id="jotHeading" class="jot-heading">${escapeHtml(FormModel.headingFor(type, mode))}</strong>
             <div class="jot-row">
                 <span class="jot-label" id="jotTypeLabel">Type</span>
                 <div class="jot-type" role="radiogroup" aria-labelledby="jotTypeLabel">
@@ -142,11 +157,7 @@ export function buildFormHtml(view: FormView): string {
             <div class="jot-row">
                 <label class="jot-label" for="jotTitle">Title</label>
                 <input type="text" name="title" id="jotTitle" class="jot-input" value="${escapeHtml(values.title)}" autocomplete="off" autofocus>
-            </div>
-            <div class="jot-row jot-row-top">
-                <label class="jot-label" for="jotBody">Text</label>
-                <textarea name="body" id="jotBody" class="jot-input" rows="3" autocomplete="off">\n${escapeHtml(values.body)}</textarea>
-            </div>
+            </div>${textRow}
             <div class="jot-row">
                 <label class="jot-label" for="jotNotebook">Notebook</label>
                 <div class="jot-combo">
