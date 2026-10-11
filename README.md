@@ -4,7 +4,11 @@ Quick capture of a note or to-do without leaving the one you are in.
 
 While you read or work in one note, Jot opens a small form for the title, a line or two of text, the notebook, tags and the due date, creates the note from it, and does not open it. You stay where you were. Joplin's own New note and New to-do create an empty note and open it, and Back lands at the top of the note you were reading; Jot exists so that never happens.
 
-Version 0.1.0 is a first build to try on the desktop. It is not in the plugin registry yet.
+0.1.0 is the first release. The desktop is tested; Android is not yet, see the known limits below.
+
+## Install
+
+In Joplin, Settings › Plugins › search for Jot and install it. Or download `io.github.pmslava.jot.jpl` from the [releases page](https://github.com/pmslava/joplin-plugin-jot/releases) and use Settings › Plugins › Install from file.
 
 ## Ways in
 

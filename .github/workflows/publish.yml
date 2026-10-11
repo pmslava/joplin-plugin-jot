@@ -158,7 +158,22 @@ jobs:
           })()
           "
 
+      # The first version of a new package cannot be published by trusted publishing (the trusted
+      # publisher is configured on an existing package), so 0.1.0 was published locally with a web
+      # login and the OIDC publisher configured right after. A release whose version is already on
+      # the registry therefore publishes nothing and succeeds, which also makes a re-run harmless.
+      - name: Skip when this version is already on npm
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          if npm view "$NAME@$PUBLISH_VERSION" version >/dev/null 2>&1; then
+            echo "::notice::$NAME@$PUBLISH_VERSION is already on npm; nothing to publish."
+            echo "ALREADY_PUBLISHED=1" >> "$GITHUB_ENV"
+          else
+            echo "$NAME@$PUBLISH_VERSION is not on npm yet; publishing."
+          fi
+
       - name: Publish to npm
+        if: env.ALREADY_PUBLISHED != '1'
         run: |
           # Fail with something readable rather than an authentication error further down.
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
