@@ -16,7 +16,7 @@
  * the answer (open); the content script makes its edit and then asks for the open (openTriggerNote), which opens that one id only, once.           *
  *                                                                                                                                                  *
  * Every decision is formModel.js's (planCreate and the rules under it), so this file is the I/O around it: the notebooks and tags read from the     *
- * data API, the dialog, the POST notes, the tags (reused by lower-cased title, created when missing, attached), and the open after Create and open. *
+ * data API, the dialog, the POST notes, the tags (reused as Joplin matches titles, created when missing, attached; never fatal), and the open.     *
  * Create opens nothing and moves no focus: the editor keeps its note.                                                                              *
  *                                                                                                                                                  *
  * THE DIALOG. One handle, created on the first open (Harper's lazy build: a failed build is not remembered, so the next open tries again), its      *
@@ -312,24 +312,36 @@ async function createNote(plan: any, row: InThisNote): Promise<Created> {
 }
 
 /** attachTags **************************************************************************************************************************************
- * Attaches the tag titles (already trimmed, lower-cased and de-duplicated) to the new note: an existing tag is reused by its lower-cased title, a   *
- * missing one is created (POST tags), and each is attached (POST tags/:id/notes). The tag list is read again here rather than taken from the open,  *
- * so a tag made meanwhile (another device's sync, another plugin) is reused rather than duplicated.                                                *
+ * Attaches the tag titles (formModel.tagKey: trimmed, NFC, lower-cased; de-duplicated) to the new note: an existing tag is reused by its tagKey, as *
+ * Joplin's own Tag.loadByTitle matches, a missing one is created (POST tags), and each is attached (POST tags/:id/notes). The tag list is read again *
+ * here rather than taken from the open, so a tag made meanwhile (another device's sync, another plugin) is reused rather than duplicated.          *
+ *                                                                                                                                                  *
+ * NEVER THROWS. The note exists by now, and what follows it (the In this note edit, the open) must still run: a list that cannot be read is a       *
+ * console warning (every tag is then created, or refused by Joplin as a duplicate), and a tag that cannot be created or attached is a console       *
+ * warning and the next tag is tried.                                                                                                               *
  ***************************************************************************************************************************************************/
 async function attachTags(noteId: string, titles: string[]): Promise<void> {
     const existing = new Map<string, string>()
-    for (const tag of await getAllTags()){
-        const title = String(tag.title || "").toLowerCase()
-        if (title && !existing.has(title)) existing.set(title, tag.id)
+    try {
+        for (const tag of await getAllTags()){
+            const key: string = FormModel.tagKey(tag.title)
+            if (key && !existing.has(key)) existing.set(key, tag.id)
+        }
+    } catch (error) {
+        console.warn("Jot: could not read the tags; the note is created and its tags are tried one by one", error)
     }
     for (const title of titles){
-        let tagId = existing.get(title)
-        if (!tagId){
-            const created = await joplin.data.post(["tags"], null, { title })
-            tagId = created.id
-            existing.set(title, tagId)
+        try {
+            let tagId = existing.get(FormModel.tagKey(title))
+            if (!tagId){
+                const created = await joplin.data.post(["tags"], null, { title })
+                tagId = created.id
+                existing.set(FormModel.tagKey(title), tagId)
+            }
+            await joplin.data.post(["tags", tagId, "notes"], null, { id: noteId })
+        } catch (error) {
+            console.warn(`Jot: could not add the tag "${title}"; the note is created without it`, error)
         }
-        await joplin.data.post(["tags", tagId, "notes"], null, { id: noteId })
     }
 }
 

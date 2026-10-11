@@ -127,16 +127,22 @@
         return { title: lines[index].trim(), body: rest.join('\n'), nothing: false }
     }
 
-    /** parseTagCsv *************************************************************************************************************************************
-     * The Tags field's comma-separated value as tag titles: each trimmed and lower-cased (Joplin compares tags that way), blanks dropped, duplicates    *
-     * dropped, the first spelling's order kept. Cockpit's setNoteTagsFromCsv parses the same way.                                                       *
+    /** tagKey / parseTagCsv ****************************************************************************************************************************
+     * tagKey is a tag title as Joplin compares it (Tag.loadByTitle, 3.6.14): trimmed, in Unicode NFC, lower-cased. Without the NFC step a title typed  *
+     * in another normal form (an accented letter as one code point or as two) would miss the existing tag here, and Joplin would then refuse to create *
+     * it as a duplicate. parseTagCsv is the Tags field's comma-separated value as tag titles: each a tagKey, blanks dropped, duplicates dropped, the   *
+     * first spelling's order kept. Cockpit's setNoteTagsFromCsv parses the same way, without the NFC step.                                             *
      ***************************************************************************************************************************************************/
+    function tagKey(title){
+        return text(title).trim().normalize('NFC').toLowerCase()
+    }
+
     function parseTagCsv(csv){
         var seen = {}
         var titles = []
         var pieces = text(csv).split(',')
         for (var index = 0; index < pieces.length; index++){
-            var title = pieces[index].trim().toLowerCase()
+            var title = tagKey(pieces[index])
             if (!title || seen[title]) continue
             seen[title] = true
             titles.push(title)
@@ -425,7 +431,7 @@
         var out = []
         for (var row = 0; row < list.length; row++){
             var title = text(list[row])
-            if (!title || present[title.toLowerCase()]) continue
+            if (!title || present[tagKey(title)]) continue
             if (matches(title, spec.value)) out.push(title)
         }
         return out
@@ -477,6 +483,19 @@
         return exact >= 0 ? exact : 0
     }
 
+    // Whether leaving a field while its list is open (a click on Create, on another field) takes the highlighted row first, as Tab does in the
+    // Notebook field. `list` is { highlight, count, typed, moved }: moved is whether the user went to that row with the arrow keys.
+    //   Notebook: when a filter is typed, or the user moved to the row. The typed text is only a filter and would be undone on leaving, so a click on
+    //             Create lands the note in the notebook the list showed rather than the one the field showed before.
+    //   Tags:     only when the user moved to the row. The token typed is itself a tag (a new one when no row is exactly it), so a row the list merely
+    //             opened on must not replace it on the way out ("art" typed must not become "party").
+    function pickOnLeave(kind, list){
+        var spec = list || {}
+        if (!(spec.highlight >= 0 && spec.highlight < spec.count)) return false
+        if (spec.moved) return kind === 'notebook' || kind === 'tag'
+        return kind === 'notebook' && !!text(spec.typed).trim()
+    }
+
     return {
         TODO: TODO,
         NOTE: NOTE,
@@ -496,6 +515,7 @@
         dialogAction: dialogAction,
         readFormValues: readFormValues,
         applyEmptyTitleRule: applyEmptyTitleRule,
+        tagKey: tagKey,
         parseTagCsv: parseTagCsv,
         parseDateTime: parseDateTime,
         parseDayStart: parseDayStart,
@@ -523,5 +543,6 @@
         moveHighlight: moveHighlight,
         suggestionHighlight: suggestionHighlight,
         notebookHighlight: notebookHighlight,
+        pickOnLeave: pickOnLeave,
     }
 })

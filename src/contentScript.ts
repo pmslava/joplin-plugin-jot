@@ -14,7 +14,8 @@
  * IPC holds the reply as long as that takes). Meanwhile from and to are mapped through every change. The answer is applied as ONE transaction:       *
  * remove deletes the trigger, link replaces it with the Markdown link, so one Undo restores what was typed; the history is closed after it (a        *
  * selection-only transaction), so text typed straight after the dialog closes is an undo step of its own. The edit is skipped, with a console        *
- * warning, when the trigger is no longer where it was (the editor got another note, or the text there changed). cancel (and no answer at all)       *
+ * warning, when the trigger is no longer where it was (the editor got another note, or the text there changed); another note also lets the fire   *
+ * go, so the trigger works there at once even if the answer never comes. cancel (and no answer at all)                                            *
  * changes nothing and remembers the occurrence, so the same trigger is not asked about again (triggerRule's README says how long). Create and open    *
  * answers with open: the note's id, which is asked back ({ type: 'open', id }) once the edit is made, so the edit lands in the note it was typed in.  *
  * Nothing here moves the focus or the caret: the caret maps through the edit as CodeMirror maps it.                                                *
@@ -150,7 +151,13 @@ class TriggerWatcher {
                 typed = []
                 this.deferred = []
                 this.cancelled = []
-                if (this.pending) this.pending.lost = true
+                // The fire waiting for its answer belongs to the document that left: it is marked lost (its edit is never made) and let go, so a reply
+                // that never settles (the mobile round trip is unverified) cannot keep the trigger off in the next one. A fire there while the form is
+                // still up is answered cancel by the plugin's one-form guard.
+                if (this.pending) {
+                    this.pending.lost = true
+                    this.pending = null
+                }
                 this.refreshConfig()
                 continue
             }

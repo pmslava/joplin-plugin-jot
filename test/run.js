@@ -59,6 +59,8 @@ async function check(name, fn) {
 //   globalSettings               what joplin.settings.globalValue() answers (editor.codeView is true, the Markdown
 //                                editor, unless given); globalValueThrows makes every globalValue reject
 //   contentScriptsThrow          joplin.contentScripts.register rejects, as an app without content scripts would
+//   postThrows                   (path, body) => boolean: a data POST it answers true for rejects (recorded first), as Joplin refusing it would
+//   tagsGetThrows                GET tags rejects after this many successful reads (0: every read rejects)
 // The content script's registration lands in state.contentScripts and its message handler in
 // state.contentScriptHandlers, by content script id.
 // Besides the per-kind records, `timeline` lists the plugin's writes and commands in the order they were made
@@ -127,6 +129,10 @@ function makeJoplin(options) {
         data: {
             get: async (pathParts, query) => {
                 state.dataGets.push({ path: pathParts, query })
+                if (pathParts[0] === 'tags' && typeof options.tagsGetThrows === 'number') {
+                    const reads = state.dataGets.filter(get => get.path[0] === 'tags').length
+                    if (reads > options.tagsGetThrows) throw new Error('cannot read the tags')
+                }
                 if (pathParts.length === 1 && pathParts[0] === 'folders') return page(options.folders || [], query)
                 if (pathParts.length === 1 && pathParts[0] === 'tags') return page(tags, query)
                 throw new Error(`unexpected GET ${pathParts.join('/')}`)
@@ -134,6 +140,7 @@ function makeJoplin(options) {
             post: async (pathParts, query, body) => {
                 state.dataPosts.push({ path: pathParts, query, body })
                 state.timeline.push(`POST ${pathParts.join('/')}`)
+                if (options.postThrows && options.postThrows(pathParts, body)) throw new Error(`refused: POST ${pathParts.join('/')}`)
                 if (pathParts.length === 1 && pathParts[0] === 'notes') return { id: newId('note'), ...body }
                 if (pathParts.length === 1 && pathParts[0] === 'tags') {
                     const tag = { id: newId('tag'), title: body.title }
@@ -943,6 +950,52 @@ async function main() {
         assert.deepStrictEqual(state.messageBoxes, [])
     })
 
+    await check('tags in Unicode NFC: the csv, the suggestions and the reuse of an existing tag compare titles as Joplin does (trimmed, NFC, lower-cased)', async () => {
+        // The pure module is required further down for its own checks; this one sits with the host's.
+        const Model = require(path.join(ROOT, 'src', 'form', 'formModel.js'))
+        const nfc = 'caf\u00e9', nfd = 'cafe\u0301'
+        assert.notStrictEqual(nfc, nfd)
+        assert.strictEqual(Model.tagKey(` ${nfd.toUpperCase()} `), nfc)
+        assert.deepStrictEqual(Model.parseTagCsv(`${nfd}, ${nfc}, Caf\u00c9`), [nfc], 'one tag however it was typed')
+        assert.deepStrictEqual(Model.tagSuggestions([nfc, 'cafeteria'], `${nfd}, caf`, Model.tagTokenAt(`${nfd}, caf`, 9)), ['cafeteria'], 'a tag already in the field in another form is not offered again')
+        const { state, outcome } = await openFormWith({
+            tags: [{ id: 'tCafe', title: 'Caf\u00e9' }, ...TAGS],
+            dialogResults: [formResult('ok', { title: 'Coffee', tags: nfd.toUpperCase() })],
+        })
+        assert.deepStrictEqual(state.dataPosts.slice(1), [{ path: ['tags', 'tCafe', 'notes'], query: null, body: { id: outcome.id } }],
+            'the tag typed in another normal form is the existing one: no POST tags, which Joplin would refuse as a duplicate')
+        const host = read('src/form/form.ts')
+        const attach = host.slice(host.indexOf('async function attachTags'), host.indexOf('/** openCreatedNote'))
+        assert.ok(attach.includes('FormModel.tagKey(tag.title)') && !attach.includes('toLowerCase()'), 'the map keys are tagKeys')
+    })
+
+    await check('a tag call that fails is a console warning: the note stays created, the other tags are attached, the In this note edit and the open still run', async () => {
+        // POST tags refused (as Joplin refuses a duplicate): that tag is skipped, the next is created and attached, then the edit and the open.
+        const refused = await openSelectionWith('Idea', {
+            postThrows: (pathParts, body) => pathParts.length === 1 && pathParts[0] === 'tags' && body.title === 'first',
+            dialogResults: [formResult('openAfter', { title: 'Idea', tags: 'first, second, work', inThisNote: 'replace' })],
+        })
+        assert.deepStrictEqual(refused.outcome, { id: refused.outcome.id, opened: true }, 'the command resolves, it does not throw')
+        assert.deepStrictEqual(refused.state.timeline, [
+            'execute selectedText', 'POST notes', 'POST tags', 'POST tags', 'POST tags/tag0002/notes', 'POST tags/tWork/notes',
+            'execute insertText', 'setValue lastSelectionAction=replace', 'execute openNote',
+        ])
+        assert.deepStrictEqual(refused.state.warnings.filter(line => line.startsWith('Jot: could not add the tag "first"')).length, 1, refused.state.warnings.join(' | '))
+        // POST tags/:id/notes refused: the same.
+        const unattached = await openFormWith({
+            postThrows: (pathParts) => pathParts.length === 3 && pathParts[1] === 'tWork',
+            dialogResults: [formResult('openAfter', { title: 'Plan', tags: 'work, idea' })],
+        })
+        assert.deepStrictEqual(unattached.outcome.opened, true)
+        assert.deepStrictEqual(unattached.state.timeline, ['execute selectedText', 'POST notes', 'POST tags/tWork/notes', 'POST tags/tIdea/notes', 'execute openNote'])
+        assert.ok(unattached.state.warnings.some(line => line.startsWith('Jot: could not add the tag "work"')), unattached.state.warnings.join(' | '))
+        // The tag list unreadable at Create (the two pages read for the form succeed, the read in attachTags fails): every tag is tried by POST tags.
+        const unread = await openFormWith({ tagsGetThrows: 2, dialogResults: [formResult('ok', { title: 'Plan', tags: 'urgent' })] })
+        assert.ok(unread.outcome && unread.outcome.id, 'the command resolves with the note')
+        assert.deepStrictEqual(unread.state.timeline, ['execute selectedText', 'POST notes', 'POST tags', 'POST tags/tag0002/notes'])
+        assert.ok(unread.state.warnings.some(line => line.startsWith('Jot: could not read the tags')), unread.state.warnings.join(' | '))
+    })
+
     await check('a refused Create on the selection route reopens with the In this note choice kept, the Title and Text as typed', async () => {
         const { state, outcome } = await openSelectionWith('Pay rent\nflat', {
             dialogResults: [
@@ -1340,6 +1393,33 @@ async function main() {
         assert.ok(bookGlue.includes('rows[index].id === pickedId'), 'the arrow keys\' full list still starts on the picked notebook')
     })
 
+    await check('leaving a field with its list open: Notebook takes the highlighted row when a filter is typed or the user arrowed to it; Tags only when the user arrowed to it', () => {
+        // Notebook: a click on Create after typing "oth" lands the note in the notebook the list showed.
+        assert.strictEqual(FormModel.pickOnLeave('notebook', { highlight: 0, count: 1, typed: 'oth', moved: false }), true, 'a filter typed: its highlighted row is taken')
+        assert.strictEqual(FormModel.pickOnLeave('notebook', { highlight: 2, count: 3, typed: '', moved: true }), true, 'a row arrowed to is taken')
+        assert.strictEqual(FormModel.pickOnLeave('notebook', { highlight: 0, count: 3, typed: '  ', moved: false }), false, 'no filter and no move: the field goes back to the notebook picked')
+        // Tags: the token typed is itself a tag, so only a row the user chose replaces it ("art" typed must not become "party").
+        assert.strictEqual(FormModel.pickOnLeave('tag', { highlight: 0, count: 1, typed: 'art', moved: false }), false, 'the row the list opened on does not replace the token')
+        assert.strictEqual(FormModel.pickOnLeave('tag', { highlight: 1, count: 2, typed: 'wo', moved: true }), true, 'a row arrowed to is taken')
+        for (const highlight of [-1, 3]) assert.strictEqual(FormModel.pickOnLeave('notebook', { highlight, count: 3, typed: 'x', moved: true }), false, 'no row highlighted: nothing taken')
+        assert.strictEqual(FormModel.pickOnLeave('other', { highlight: 0, count: 1, typed: 'x', moved: true }), false)
+        // The glue: both fields leave through leaveJotSuggest on blur and on Tab; the arrow keys mark the move; a pick on leaving touches no selection.
+        const glue = read('src/form/formWebview.js')
+        const leave = glue.slice(glue.indexOf('function leaveJotSuggest'), glue.indexOf('function showNotebookSuggestions'))
+        assert.ok(leave.includes('model().pickOnLeave(jotSuggest.kind, spec)') && leave.includes('pickJotSuggest(jotSuggest.highlight, true)'), 'leaving asks the model, then picks quietly')
+        assert.ok(leave.includes("notebookTextIsFilter() ? input.value : ''"), 'a notebook path left as it was is not a filter')
+        for (const name of ['function onJotNotebookBlur', 'function onJotTagsBlur']) {
+            const body = glue.slice(glue.indexOf(name), glue.indexOf('\n}\n', glue.indexOf(name)))
+            assert.ok(body.includes('leaveJotSuggest(event.currentTarget)'), `${name} leaves through the rule`)
+        }
+        const keys = glue.slice(glue.indexOf('function onJotSuggestKeyDown'), glue.indexOf('function onJotNotebookInput'))
+        assert.ok(keys.slice(keys.indexOf("event.key === 'Tab'")).includes('leaveJotSuggest(input)'), 'Tab leaves through the same rule')
+        assert.ok(keys.includes('jotSuggest.moved = true'), 'the arrow keys mark the row as chosen')
+        assert.ok(glue.includes('token: token || null, moved: false }'), 'a list opened by typing starts unmoved')
+        const pick = glue.slice(glue.indexOf('function pickJotSuggest'), glue.indexOf('function leaveJotSuggest'))
+        assert.ok(pick.includes('if (!leaving) current.input.select()') && pick.includes('if (!leaving) current.input.setSelectionRange'), 'a pick on leaving moves no selection')
+    })
+
     await check('formModel resolves window.SearchTokens at call time: before the script has run every row matches, after it the filter applies', () => {
         const vm = require('vm')
         const sandbox = { window: {} }
@@ -1409,7 +1489,7 @@ async function main() {
         assert.deepStrictEqual(literals, [], 'no hard-coded white or black')
     })
 
-    await check('dialog glue: Enter in a suggestion list is taken at the target phase (stopPropagation + preventDefault), Escape is the host\'s, globals at call time', () => {
+    await check('dialog glue: Enter and Escape in an open suggestion list are taken at the target phase (stopPropagation + preventDefault); with no list open Escape is the host\'s; globals at call time', () => {
         const glue = read('src/form/formWebview.js')
         const handler = glue.slice(glue.indexOf('function onJotSuggestKeyDown'), glue.indexOf('function onJotNotebookInput'))
         const enter = handler.slice(handler.indexOf("event.key === 'Enter'"), handler.indexOf("event.key === 'Tab'"))
@@ -1422,7 +1502,17 @@ async function main() {
             'the handler sits on the inputs themselves (the target phase)')
         assert.ok(!/(document|window)\.addEventListener\(\s*'keydown'/.test(glue), 'no document- or window-level keydown listener')
         assert.ok(!/addEventListener\([^)]*,\s*true\s*\)/.test(glue), 'no capture-phase listener')
-        assert.ok(!/Escape/.test(glue.replace(/\/\*\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'Escape is never handled: the host cancels')
+        // Escape: only the list handler takes it, and only while its list is open (it closes the list alone); with none open it returns before
+        // stopping anything, so the host hears the press and cancels the form - a second Escape closes the form.
+        const bare = (source) => source.replace(/\/\*\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+        const escape = bare(handler).slice(bare(handler).indexOf("event.key === 'Escape'"))
+        assert.ok(escape.length > 0, 'the list handler looks at Escape')
+        const escapeBranch = escape.slice(0, escape.indexOf('return\n    }'))
+        assert.ok(escapeBranch.indexOf('if (!open) return') >= 0 && escapeBranch.indexOf('if (!open) return') < escapeBranch.indexOf('event.stopPropagation()'),
+            'with no list open Escape is left to the host')
+        assert.ok(escapeBranch.includes('event.preventDefault()') && escapeBranch.includes('event.stopPropagation()') && escapeBranch.includes('closeJotSuggest()'),
+            'with a list open Escape closes the list and the host never sees it')
+        assert.strictEqual((bare(glue).match(/Escape/g) || []).length, 1, 'Escape is looked at in the list handler only')
         assert.ok(glue.includes('new MutationObserver(initJotFormIfNeeded)'), 'every new form is wired by the observer (setHtml does not re-run scripts)')
         for (const line of glue.split('\n')) {
             assert.ok(!/^var\b.*\b(window\.FormModel|window\.AlarmQuick|AlarmQuick\.|window\.SearchTokens)/.test(line), `no load-time binding: ${line}`)
@@ -1589,6 +1679,25 @@ async function main() {
         memory.view.dispatch({ changes: { from: 0, to: 2, insert: '++' } })
         memory.view.dispatch({ changes: { from: 0, to: 2, insert: '++' }, userEvent: 'input.type' })
         assert.strictEqual(memory.triggers().length, 2, 'the memory belonged to the document that was replaced')
+    })
+
+    await check('content script: another note lets a waiting fire go - a reply that never comes cannot keep the trigger off there, and a late reply edits nothing', async () => {
+        const editor = await mountTrigger('hello ')
+        editor.type('++')
+        assert.strictEqual(editor.triggers().length, 1)
+        editor.type('++')
+        assert.strictEqual(editor.triggers().length, 1, 'while it waits, a second ++ in the same note does not fire')
+        const noteId = CMStateEffect.define()
+        editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: 'other note ' }, effects: noteId.of('0123456789abcdef0123456789abcdef') })
+        await tick()
+        editor.type('++')
+        assert.strictEqual(editor.triggers().length, 2, 'the next note fires at once, though the first reply never came')
+        assert.deepStrictEqual(editor.triggers()[1], { type: 'trigger', from: 11, to: 13, trigger: '++' })
+        // The first (late) reply: its note is gone, so it edits nothing and remembers nothing; the second is applied.
+        await editor.quietly(() => editor.answerTrigger({ action: 'remove' }))
+        assert.strictEqual(editor.text(), 'other note ++')
+        await editor.answerTrigger({ action: 'remove' })
+        assert.strictEqual(editor.text(), 'other note ')
     })
 
     await check('content script: the trigger in force is the plugin\'s answer - "" turns it off, a new one applies from the next answer, an unanswered question is asked again', async () => {

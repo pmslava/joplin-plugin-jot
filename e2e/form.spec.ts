@@ -152,6 +152,44 @@ test.describe('The form, create mode (desktop)', () => {
     expect(note.parent_id).toBe(await folderId(other));
   });
 
+  test('a Notebook filter left by a mouse click on Create takes the highlighted notebook', async () => {
+    const { win } = joplin;
+    const title = `jot-click-${stamp}`;
+    const pending = startJot(win);
+    const form = await formFrame(win);
+    await form.locator('#jotTitle').fill(title);
+    await form.locator('#jotNotebook').click();
+    await win.keyboard.type('other');
+    await expect(form.locator('#jotNotebookList .jot-suggest-row.-highlighted')).toHaveText(other);
+
+    // No Enter, no Tab: the mouse goes straight to Joplin's Create button, so the field only loses the focus.
+    await dialogButton(win, 'Create').click();
+    await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
+    const outcome = await pending;
+    const note = await readNote(outcome.id);
+    expect(note.title).toBe(title);
+    expect(note.parent_id).toBe(await folderId(other));
+  });
+
+  test('Escape with a suggestion list open closes the list only; a second Escape cancels the form', async () => {
+    const { win } = joplin;
+    const pending = startJot(win);
+    const form = await formFrame(win);
+    await form.locator('#jotNotebook').click();
+    await win.keyboard.type('other');
+    await expect(form.locator('#jotNotebookList')).toBeVisible();
+
+    await win.keyboard.press('Escape');
+    await expect(form.locator('#jotNotebookList')).toBeHidden();
+    await win.waitForTimeout(1000);
+    expect(await formIsOpen(win)).toBe(true);
+    await expect(form.locator('#jotNotebook')).toHaveValue(book);
+
+    await win.keyboard.press('Escape');
+    await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
+    expect(await pending).toBeFalsy();
+  });
+
   test('the bell unfolds the picker; a calendar day writes the Due row, and the created to-do has that due date at the day start time', async () => {
     const { win } = joplin;
     const title = `jot-due-${stamp}`;

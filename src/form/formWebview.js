@@ -15,14 +15,16 @@
  * THE KEYBOARD AND THE HOST. Joplin's own script in the dialog submits the form (the Create button, id ok) on Enter in any <input type=text>, from a *
  * document-level keydown listener in the bubble phase that ignores defaultPrevented, and cancels it on Escape. Enter inside an open suggestion list  *
  * must pick the row and not create, so the list's input handles keydown on itself (the target phase) and calls stopPropagation and preventDefault;  *
- * the host's listener never sees that press. Escape is always left to the host. Enter in the Text is a newline, which the host does not touch.     *
+ * the host's listener never sees that press. Escape is taken the same way while a list is open, and closes only the list; with no list open it is   *
+ * left to the host, which cancels the form. Enter in the Text is a newline, which the host does not touch.                                         *
  ***************************************************************************************************************************************************/
 
 /** State of the current open **********************************************************************************************************************/
 // The island of the current open: { notebooks: [{id, path}], tags: [title], defaults: { type, notebookId, dayStart }, pickerOpen,
 // inThisNote: { choices, value } on the selection and trigger routes, else null }.
 var jotData = { notebooks: [], tags: [], defaults: {}, pickerOpen: false, inThisNote: null }
-// The open suggestion list: { kind: 'notebook'|'tag', input, list, rows, highlight, token }, or null when none is open.
+// The open suggestion list: { kind: 'notebook'|'tag', input, list, rows, highlight, token, moved }, or null when none is open. moved is whether the
+// user went to the highlighted row with the arrow keys (formModel.pickOnLeave).
 var jotSuggest = null
 
 /** State of the picker (ported from alarmWebview.js) **********************************************************************************************/
@@ -209,10 +211,12 @@ function onJotBellClick(){
 
 /** Suggestion lists *******************************************************************************************************************************
  * Notebook: the rows are the notebooks whose path survives the filter (the text typed); a pick writes the path into the input and the id into the    *
- * hidden notebookId. The typed text is only a filter: on leaving the field it goes back to the picked notebook's path, and Enter with no row left to *
- * pick does nothing, so a note is never created in a notebook other than the one the field shows.                                                    *
+ * hidden notebookId. The typed text is only a filter: on leaving the field with no row taken it goes back to the picked notebook's path, and Enter  *
+ * with no row left to pick does nothing, so a note is never created in a notebook other than the one the field (or its list) shows.                *
  * Tags: the rows are the tag titles matching the comma-separated token being typed, minus those already in the field; a pick replaces that token     *
  * only. The csv is the value, so a tag that does not exist yet is simply typed and is created on Create.                                            *
+ * Leaving a field while its list is open (Tab, a click on Create or on another field) takes the highlighted row first when formModel.pickOnLeave    *
+ * says so: in Notebook when a filter is typed or the user arrowed to the row, in Tags only when the user arrowed to it. Escape closes the list alone. *
  * Both lists sit in the form (position: relative) out of the flow, under their input when the form has room below it, else over it, capped to that  *
  * room: the form's size, which is what Joplin measures, never changes.                                                                              *
  ***************************************************************************************************************************************************/
@@ -236,7 +240,7 @@ function openJotSuggest(kind, input, list, rows, highlight, token){
         if (jotSuggest) closeJotSuggest()
         return
     }
-    jotSuggest = { kind: kind, input: input, list: list, rows: rows, highlight: highlight, token: token || null }
+    jotSuggest = { kind: kind, input: input, list: list, rows: rows, highlight: highlight, token: token || null, moved: false }
     list.textContent = ''
     for (var index = 0; index < rows.length; index++){
         var row = document.createElement('div')
@@ -283,7 +287,8 @@ function scrollJotHighlight(){
     }
 }
 
-function pickJotSuggest(index){
+// `leaving`: the pick is made as the field loses the focus, so the selection and the caret are not touched.
+function pickJotSuggest(index, leaving){
     if (!jotSuggest || index < 0 || index >= jotSuggest.rows.length) return
     var current = jotSuggest
     var row = current.rows[index]
@@ -291,12 +296,21 @@ function pickJotSuggest(index){
     if (current.kind === 'notebook'){
         jotById('jotNotebookId').value = row.id
         current.input.value = row.path
-        current.input.select()
+        if (!leaving) current.input.select()
     } else {
         var picked = model().applyTagPick(current.input.value, current.token, row)
         current.input.value = picked.value
-        current.input.setSelectionRange(picked.caret, picked.caret)
+        if (!leaving) current.input.setSelectionRange(picked.caret, picked.caret)
     }
+}
+
+// The field `input` loses the focus: its open list is picked from (formModel.pickOnLeave) or closed.
+function leaveJotSuggest(input){
+    if (!jotSuggest || jotSuggest.input !== input) return
+    var typed = jotSuggest.kind === 'notebook' ? (notebookTextIsFilter() ? input.value : '') : (jotSuggest.token ? jotSuggest.token.value : '')
+    var spec = { highlight: jotSuggest.highlight, count: jotSuggest.rows.length, typed: typed, moved: jotSuggest.moved }
+    if (model().pickOnLeave(jotSuggest.kind, spec)) pickJotSuggest(jotSuggest.highlight, true)
+    else closeJotSuggest()
 }
 
 function showNotebookSuggestions(showAll){
@@ -340,7 +354,21 @@ function onJotSuggestKeyDown(event){
             return
         }
         jotSuggest.highlight = model().moveHighlight(jotSuggest.rows.length, jotSuggest.highlight, event.key === 'ArrowDown' ? 1 : -1)
+        jotSuggest.moved = true
         scrollJotHighlight()
+        return
+    }
+    if (event.key === 'Escape'){
+        // An open list takes Escape and closes, the form stays; a notebook filter goes back to the notebook picked. With no list open the host
+        // hears the press and cancels the form.
+        if (!open) return
+        event.preventDefault()
+        event.stopPropagation()
+        closeJotSuggest()
+        if (kind === 'notebook' && notebookTextIsFilter()){
+            input.value = jotNotebookPath(jotById('jotNotebookId').value)
+            input.select()
+        }
         return
     }
     if (event.key === 'Enter'){
@@ -363,9 +391,8 @@ function onJotSuggestKeyDown(event){
         return
     }
     if (event.key === 'Tab'){
-        // Tab takes the highlighted notebook (the typed filter would otherwise be undone on leaving); a tag is never replaced by Tab.
-        if (open && kind === 'notebook' && jotSuggest.highlight >= 0) pickJotSuggest(jotSuggest.highlight)
-        else if (open) closeJotSuggest()
+        // Tab leaves the field: the highlighted row is taken as on any other way out (formModel.pickOnLeave), before the focus moves.
+        if (open) leaveJotSuggest(input)
     }
 }
 
@@ -392,7 +419,7 @@ function onJotNotebookMouseUp(event){
 
 function onJotNotebookBlur(event){
     jotNotebookSelectOnMouseUp = false
-    if (jotSuggest && jotSuggest.input === event.currentTarget) closeJotSuggest()
+    leaveJotSuggest(event.currentTarget)
     if (notebookTextIsFilter()) event.currentTarget.value = jotNotebookPath(jotById('jotNotebookId').value)
 }
 
@@ -406,7 +433,7 @@ function onJotTagsMouseDown(event){
 }
 
 function onJotTagsBlur(event){
-    if (jotSuggest && jotSuggest.input === event.currentTarget) closeJotSuggest()
+    leaveJotSuggest(event.currentTarget)
 }
 
 // A press on a row must not take the focus from the input (which would close the list before the click lands).
