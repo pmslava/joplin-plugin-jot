@@ -2046,7 +2046,11 @@ async function main() {
         assert.ok(swallow.includes('event.preventDefault()') && swallow.includes('event.stopPropagation()'), 'a notebook filter with nothing to pick swallows Enter')
         assert.ok(glue.includes("notebook.addEventListener('keydown', onJotSuggestKeyDown)") && glue.includes("tags.addEventListener('keydown', onJotSuggestKeyDown)"),
             'the handler sits on the inputs themselves (the target phase)')
-        assert.ok(!/(document|window)\.addEventListener\(\s*'keydown'/.test(glue), 'no document- or window-level keydown listener')
+        assert.ok(!/document\.addEventListener\(\s*'keydown'/.test(glue), 'no document-level keydown listener')
+        assert.deepStrictEqual(glue.match(/window\.addEventListener\(\s*'keydown'[^)]*\)/g), ["window.addEventListener('keydown', onJotWindowKeyDown)"],
+            'one window-level keydown listener, in the bubble phase (no capture flag), and it leaves inputs alone, so a list still takes its Enter first')
+        const windowRule = glue.slice(glue.indexOf('function onJotWindowKeyDown'), glue.indexOf('function focusJotTitle'))
+        assert.ok(windowRule.indexOf("if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return") < windowRule.indexOf('event.preventDefault()'))
         assert.ok(!/addEventListener\([^)]*,\s*true\s*\)/.test(glue), 'no capture-phase listener')
         // Escape: only the list handler takes it, and only while its list is open (it closes the list alone); with none open it returns before
         // stopping anything, so the host hears the press and cancels the form - a second Escape closes the form.
@@ -2079,6 +2083,17 @@ async function main() {
         assert.ok(rule.includes("if (!target || target.tagName !== 'INPUT') return"), 'text inputs only: a new line in the Text stays a new line')
         assert.ok(rule.includes('if (!title || String(title.value).trim()) return'), 'a Title with text submits as before')
         assert.ok(rule.includes('event.stopPropagation()') && rule.includes('event.preventDefault()') && rule.includes('title.focus()'))
+    })
+
+    await check('dialog glue: Enter outside a text input (a calendar day, a time, a quick button or a segment just clicked, or nothing focused) submits the form through its submit event; the Title empty, it focuses the Title', () => {
+        const glue = read('src/form/formWebview.js')
+        assert.ok(glue.includes("window.addEventListener('keydown', onJotWindowKeyDown)"), 'on the window, in the bubble phase: last of all')
+        const rule = glue.slice(glue.indexOf('function onJotWindowKeyDown'), glue.indexOf('function focusJotTitle'))
+        assert.ok(rule.includes("if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return"))
+        assert.ok(rule.includes("if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return"), 'text inputs stay Joplin\'s, the Text keeps its new line')
+        assert.ok(rule.includes('event.preventDefault()'), 'a focused button does not take Enter as a click')
+        assert.ok(rule.indexOf('title.focus()') < rule.indexOf('form.requestSubmit()'), 'the empty Title first')
+        assert.ok(rule.includes("form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))"), 'Joplin\'s document submit listener answers either way')
     })
 
     await check('dialog glue: every selector (Type, In this note, Back link, Open) is one generic radiogroup - click, arrow keys wrapping through moveHighlight, the hidden input written; In this note falls back to the route\'s default, else the first button drawn; one line, never stacked', () => {

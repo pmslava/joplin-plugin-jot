@@ -741,6 +741,30 @@ function onJotFormKeyDown(event){
     title.focus()
 }
 
+/** Enter anywhere else ***************************************************************************************************************************
+ * Joplin submits on Enter only in a text input (UserWebviewIndex.js, 3.6.14 and 3.7.21). After a pick in the picker the focus is on the calendar    *
+ * day, the time or the quick button just clicked - or on nothing at all, once the calendar redraws under the click - and a segment or the bell can   *
+ * hold it too; there Joplin does nothing with Enter, and a button would take it as a click. So Enter there submits the form as well, as the         *
+ * heading's hint says, through the form's submit event, which Joplin's own submit listener answers with Create (or Save); Space still presses a    *
+ * button. With the Title empty it focuses the Title, as Enter in a text input does. Text inputs are Joplin's (above), the Text keeps Enter as a new   *
+ * line, and an Enter something else has already taken (defaultPrevented) is left alone. On the window, in the bubble phase: last of all.            *
+ ***************************************************************************************************************************************************/
+function onJotWindowKeyDown(event){
+    if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return
+    var tag = event.target && event.target.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+    var form = jotForm()
+    if (!form || form.getAttribute('data-jot-ready') !== '1') return
+    event.preventDefault()
+    var title = jotById('jotTitle')
+    if (title && !String(title.value).trim()){
+        title.focus()
+        return
+    }
+    if (typeof form.requestSubmit === 'function') form.requestSubmit()
+    else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+}
+
 function focusJotTitle(){
     var title = jotById('jotTitle')
     if (!title) return
@@ -819,6 +843,7 @@ function initJotFormIfNeeded(){
 }
 
 window.addEventListener('focus', onJotWindowFocus)
+window.addEventListener('keydown', onJotWindowKeyDown)
 new MutationObserver(initJotFormIfNeeded).observe(document.documentElement, { childList: true, subtree: true })
 if (document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', initJotFormIfNeeded)

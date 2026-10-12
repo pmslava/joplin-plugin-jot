@@ -30,7 +30,7 @@ In Joplin, Settings › Plugins › search for Jot and install it. Or download `
 
 ## The form
 
-Type, Title, Text, Notebook, Tags, then the choices, and Due last. The title is focused when the form opens, so typing a title and pressing Enter is all a capture needs; Enter with the title still empty keeps the form open and puts the cursor back in the title. Every choice is one line of buttons you click or move through with the arrow keys:
+Type, Title, Text, Notebook, Tags, then the choices, and Due last. The title is focused when the form opens, so typing a title and pressing Enter is all a capture needs; Enter creates from anywhere in the form except the Text, where it is a new line, so a date picked with the mouse is followed by Enter as well; with the title still empty, Enter keeps the form open and puts the cursor back in the title. Every choice is one line of buttons you click or move through with the arrow keys:
 
 - **Type**: To-do or Note.
 - **In this note**, when the form was opened from highlighted text: Replace with link (the default), Keep text, or Add link after. Opened by `++`: Replace `++` with link (the default) or Remove `++`. Jot remembers your last choice for each.

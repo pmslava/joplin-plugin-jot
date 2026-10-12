@@ -224,6 +224,46 @@ test.describe('The form, create mode (desktop)', () => {
     expect(await pending).toBeFalsy();
   });
 
+  test('Enter after a pick in the picker creates: a calendar day clicked, then a time, then Enter (no button), the to-do has that due date', async () => {
+    const { win } = joplin;
+    const title = `jot-enter-due-${stamp}`;
+    const pending = startJot(win);
+    const form = await formFrame(win);
+    await form.locator('#jotTitle').fill(title);
+    await form.locator('#jotBell').click();
+    await expect(form.locator('#jotPicker')).toBeVisible();
+    const day = form.locator('.alarm-cal-day:not(.-outside)', { hasText: /^16$/ });
+    const iso = (await day.getAttribute('data-date'))!;
+    await day.click();
+    await expect(form.locator('#jotDueText')).toHaveText(`${iso} 09:00`);
+    await win.keyboard.press('Enter');
+    await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
+    const outcome = await pending;
+    const note = await readNote(outcome.id);
+    const [year, month] = iso.split('-').map(Number);
+    expect(note.title).toBe(title);
+    expect(note.todo_due).toBe(new Date(year, month - 1, 16, 9, 0, 0, 0).getTime());
+  });
+
+  test('Enter on a clicked segment creates too; with the Title empty it focuses the Title instead', async () => {
+    const { win } = joplin;
+    const title = `jot-enter-seg-${stamp}`;
+    const pending = startJot(win);
+    const form = await formFrame(win);
+    await form.locator('#jotTypeRow .jot-seg-option[data-value="note"]').click();
+    await win.keyboard.press('Enter');
+    await win.waitForTimeout(800);
+    expect(await formIsOpen(win)).toBe(true);
+    await expect.poll(async () => form.evaluate(() => document.activeElement && document.activeElement.id), { timeout: 5_000 }).toBe('jotTitle');
+    await win.keyboard.type(title);
+    await form.locator('#jotTypeRow .jot-seg-option[data-value="note"]').click();
+    await win.keyboard.press('Enter');
+    await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
+    const outcome = await pending;
+    const note = await readNote(outcome.id);
+    expect([note.title, note.is_todo]).toEqual([title, 0]);
+  });
+
   test('the bell unfolds the picker; a calendar day writes the Due row, and the created to-do has that due date at the day start time', async () => {
     const { win } = joplin;
     const title = `jot-due-${stamp}`;
