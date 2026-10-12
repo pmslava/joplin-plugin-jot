@@ -2,6 +2,8 @@
 
 Written 2026-10-11 by the managing session, from xiaofeng's request in the Cockpit forum thread (post 19 of "Plugin: Cockpit"), Slava's candidate implementations, and his decision the same day to make this a plugin of its own rather than a Cockpit feature. It is for the session that plans and runs the build, in the shape of Cockpit's `docs/BRIEF-2.7-local-mirror.md`: what the user asked, what exists to build on, the facts (verified and to verify), the design, every user-facing string, the Cockpit side, the phases with their gates, the open questions, and the standing rules. Nothing is built yet; sections 4 to 6 are for Slava's review before any code.
 
+**Changed in 0.2 (2026-10-12, issues 1 to 3):** the form has two buttons, Create and Cancel; Create and open became the form's Open row (No by default, In editor, New window) with the `openAfterCreate` setting replacing `openTarget`; every selector is one line of segments; the Tags start with the current note's tags, a Back link row adds a line linking to it, and a notebook setting names where notes go. `docs/DEVLOG.md` has the details; the sections below describe 1.0 as first designed.
+
 Read these first: this brief; Cockpit's `docs/BRIEF-2.7-local-mirror.md` section 8 (the standing rules, which apply here too) and its `docs/MOBILE.md` §1a (what a plugin dialog can and cannot do on Android); Harper's `src/index.ts` banner "SETTINGS DIALOG" (four load-bearing facts about plugin dialogs); and the Cockpit main Joplin note (`164d64772c624ef99baeb751d4ef8e36`) for the gotchas every plugin of this family shares.
 
 ---

@@ -17,7 +17,7 @@ import {
  * been answered and the note written, so each case starts it, drives the dialog, then awaits what it resolved
  * ({ id, opened }). What was written is read back through Joplin's own data API, enabled on the throwaway profile.
  *
- * The dialog's fields live in a plugin webview iframe; its Create / Create and open / Cancel buttons are Joplin's,
+ * The dialog's fields live in a plugin webview iframe; its Create / Cancel buttons are Joplin's,
  * in the main window. A closed dialog unmounts its iframe, so "the form is gone" is "no frame holds #jotForm".
  */
 test.describe('The form, create mode (desktop)', () => {
@@ -70,7 +70,7 @@ test.describe('The form, create mode (desktop)', () => {
     return pending;
   }
 
-  /** One of Joplin's dialog buttons, by its exact label (so "Create" never matches "Create and open"). */
+  /** One of Joplin's dialog buttons, by its exact label. */
   function dialogButton(win: Page, label: string) {
     return win.locator('.user-webview-dialog button', { hasText: new RegExp(`^${label}$`) }).last();
   }
@@ -256,13 +256,16 @@ test.describe('The form, create mode (desktop)', () => {
     expect(note.todo_due).toBe(new Date(year, month - 1, 15, 9, 0, 0, 0).getTime());
   });
 
-  test('Create and open opens the new note in the editor', async () => {
+  test('Open on In editor: Create opens the new note in the editor', async () => {
     const { win } = joplin;
     const title = `jot-open-${stamp}`;
     const pending = startJot(win);
     const form = await formFrame(win);
     await form.locator('#jotTitle').fill(title);
-    await dialogButton(win, 'Create and open').click();
+    await expect(form.locator('#jotOpen')).toHaveValue('no');
+    await form.locator('#jotOpenRow .jot-seg-option[data-value="editor"]').click();
+    await expect(form.locator('#jotOpen')).toHaveValue('editor');
+    await dialogButton(win, 'Create').click();
     await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
 
     const outcome = await pending;

@@ -8,7 +8,8 @@
  * create plan the host executes, the selection route's rules (the title/text split, the In this note choices and their default, the link, the edit  *
  * the host makes in the note), the trigger route's (its two choices, their labels with the trigger printed, the answer the content script gets),     *
  * edit mode's (the prefill from the note, the Due split back into its fields, the "what changed" diff that Save writes), the reading of jot.open's *
- * arguments (brief section 6), and the small helpers the dialog's glue asks (the heading, the Due row text, the suggestion lists, the tag token).  *
+ * arguments (brief section 6), the Open row's choices, the back link (Copy Note ID's placeholders, rendered for the note the user is in, and put  *
+ * first or last in the body), and the small helpers the dialog's glue asks (the heading, the Due row text, the suggestion lists, the tag token).   *
  *                                                                                                                                                  *
  * CROSS-SCRIPT GLOBALS. In the dialog, window.SearchTokens (searchTokens.js, the filter rule copied from Cockpit) may load before or after this file:*
  * addScript appends plain <script> elements, which run in the order they finish loading. So it is looked up per call (searchTokens below), never     *
@@ -56,6 +57,34 @@
     var TRIGGER_DEFAULT = LINK
     // The title Joplin shows for a note whose title is empty, used as the link's text so a link to such a note is never invisible.
     var UNTITLED = 'Untitled'
+    // The segments' short labels: every selector is one line, so the In this note choices are shortened there and keep their full wording as the
+    // button's tooltip (SELECTION_LABELS, triggerLabels).
+    var SELECTION_SHORT_LABELS = {
+        replace: 'Replace with link',
+        keep: 'Keep text',
+        after: 'Add link after',
+    }
+
+    // The Open row: what Create does once the note exists - nothing (stay where you are), open it in the editor, or open it in a window of its own
+    // (desktop only). The setting openAfterCreate is its default; NO until the user picks another.
+    var OPEN_NO = 'no'
+    var OPEN_EDITOR = 'editor'
+    var OPEN_WINDOW = 'window'
+    var OPEN_LABELS = { no: 'No', editor: 'In editor', window: 'New window' }
+    var OPEN_TITLES = {
+        no: 'Create the note and stay where you are',
+        editor: 'Create the note and open it in the editor',
+        window: 'Create the note and open it in a window of its own',
+    }
+
+    // The Back link row: add a line linking to the note the user is in, or not. The setting backlink is its default (off); the line's text is the
+    // backlinkTemplate setting rendered with Copy Note ID's placeholders (backlinkText), first in the body or last (backlinkPosition).
+    var BACKLINK_ADD = 'add'
+    var BACKLINK_NONE = 'none'
+    var BACKLINK_LABELS = { add: 'Add', none: "Don't add" }
+    var BACKLINK_TOP = 'top'
+    var BACKLINK_BOTTOM = 'bottom'
+    var DEFAULT_BACKLINK_TEMPLATE = 'Parent {note_type}: {note_link}'
 
     function text(value){ return value == null ? '' : String(value) }
     function pad2(value){ return String(value).padStart(2, '0') }
@@ -94,14 +123,83 @@
     }
 
     /** dialogAction ************************************************************************************************************************************
-     * What a dialog result asks for: 'create' (the ok button, which Enter in a text input also resolves to), 'createAndOpen' (the openAfter button), or *
-     * 'none' for anything else (Cancel, Escape, a closed dialog, no result at all).                                                                      *
+     * What a dialog result asks for: 'create' (the ok button, Create or Save, which Enter in a text input also resolves to), or 'none' for anything   *
+     * else (Cancel, Escape, a closed dialog, no result at all). Whether the new note opens is the Open row's, not a button's.                         *
      ***************************************************************************************************************************************************/
     function dialogAction(result){
         var id = result && result.id
-        if (id === 'ok') return 'create'
-        if (id === 'openAfter') return 'createAndOpen'
-        return 'none'
+        return id === 'ok' ? 'create' : 'none'
+    }
+
+    /** openChoices / openChoice ************************************************************************************************************************
+     * The Open row's buttons: No, In editor and New window on desktop; No and In editor on mobile, which has no windows. openChoice is the choice that  *
+     * holds among them: the value when offered, a new window read as the editor where it is not, anything else as No.                                *
+     ***************************************************************************************************************************************************/
+    function openChoices(mobile){
+        return mobile ? [OPEN_NO, OPEN_EDITOR] : [OPEN_NO, OPEN_EDITOR, OPEN_WINDOW]
+    }
+
+    function openChoice(value, mobile){
+        var list = openChoices(mobile)
+        if (list.indexOf(value) >= 0) return value
+        return value === OPEN_WINDOW ? OPEN_EDITOR : OPEN_NO
+    }
+
+    /** backlinkText ************************************************************************************************************************************
+     * The back link's line for the note the user is in (`parent`: id, title, is_todo, parent_id), from the backlinkTemplate setting with Copy Note ID's   *
+     * placeholders and its rules: {note_id}, {note_title}, {note_type} ("to-do" or "note"), {note_link} (the Markdown link, as noteLink writes it),     *
+     * {notebook_id}, {notebook_name}, {notebook_path} (root first, joined with "/", from `folders`: id, title, parent_id). A placeholder's name is       *
+     * forgiving - {note link}, {Note-Link} and {note_link} are the same - and anything that is not a known placeholder stays as written, braces and all. *
+     * An empty template is the default, "Parent {note_type}: {note_link}". '' without a parent note.                                                     *
+     ***************************************************************************************************************************************************/
+    function canonicalKey(rawKey){
+        return text(rawKey).trim().toLowerCase().replace(/[\s_-]+/g, '_')
+    }
+
+    function notebookTrail(folders, folderId){
+        var byId = {}
+        var list = Array.isArray(folders) ? folders : []
+        for (var index = 0; index < list.length; index++) if (list[index] && list[index].id) byId[list[index].id] = list[index]
+        var titles = []
+        var folder = byId[folderId]
+        var guard = 0
+        while (folder && guard++ < 100){
+            titles.unshift(text(folder.title))
+            folder = byId[folder.parent_id]
+        }
+        return titles
+    }
+
+    function backlinkText(template, parent, folders){
+        if (!parent || !text(parent.id)) return ''
+        var chosen = text(template).trim() ? text(template) : DEFAULT_BACKLINK_TEMPLATE
+        var trail = notebookTrail(folders, parent.parent_id)
+        var values = {
+            note_id: text(parent.id),
+            note_title: text(parent.title),
+            note_type: parent.is_todo ? 'to-do' : 'note',
+            note_link: noteLink(parent.title, parent.id),
+            notebook_id: text(parent.parent_id),
+            notebook_name: trail.length ? trail[trail.length - 1] : '',
+            notebook_path: trail.join('/'),
+        }
+        return chosen.replace(/\{([^{}]+)\}/g, function(placeholder, rawKey){
+            var key = canonicalKey(rawKey)
+            return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : placeholder
+        }).trim()
+    }
+
+    /** composeBody *************************************************************************************************************************************
+     * The body with the back link: first, then an empty line, then the text (top, the default); or the text, an empty line, then the link (bottom).     *
+     * Blank lines at the text's edges are dropped so exactly one empty line separates them. Without text the body is the link alone; without a link    *
+     * the body is the text as typed.                                                                                                                  *
+     ***************************************************************************************************************************************************/
+    function composeBody(body, backlink, position){
+        var line = text(backlink).trim()
+        if (!line) return text(body)
+        var content = text(body).replace(/^(\s*\n)+/, '').replace(/\s+$/, '')
+        if (!content) return line
+        return position === BACKLINK_BOTTOM ? content + '\n\n' + line : line + '\n\n' + content
     }
 
     /** readFormValues **********************************************************************************************************************************
@@ -119,6 +217,8 @@
             dueDate: text(form.dueDate),
             dueTime: text(form.dueTime),
             inThisNote: text(form.inThisNote),
+            backlink: text(form.backlink),
+            open: text(form.open),
         }
     }
 
@@ -276,8 +376,9 @@
     }
 
     /** defaultNotebookId *******************************************************************************************************************************
-     * The notebook the form starts on (brief 4.2): the caller's notebook id when given; otherwise the notebook of the note the editor holds; otherwise  *
-     * the notebook the app is showing; otherwise the first by path. A candidate that is not among the notebooks (gone, in the trash) is passed over.     *
+     * The notebook the form starts on (brief 4.2): the caller's notebook id when given; otherwise the notebook the setting names (defaultNotebook, an    *
+     * inbox, say); otherwise the notebook of the note the editor holds; otherwise the notebook the app is showing; otherwise the first by path. A      *
+     * candidate that is not among the notebooks (gone, in the trash) is passed over.                                                                     *
      * null only when there is no notebook at all.                                                                                                        *
      ***************************************************************************************************************************************************/
     function defaultNotebookId(notebooks, candidates){
@@ -287,6 +388,7 @@
         var spec = candidates || {}
         var order = [
             spec.callerNotebookId,
+            spec.settingNotebookId,
             spec.editorNote && spec.editorNote.parent_id,
             spec.shownFolder && spec.shownFolder.id,
         ]
@@ -301,35 +403,41 @@
      *   { kind: 'none' }       Cancel, Escape, or a result with no button.                                                                              *
      *   { kind: 'nothing' }    Create with an empty Title and an empty Text: nothing is created, the form just closes.                                  *
      *   { kind: 'invalidDue' } a to-do whose Due fields cannot be read: Create is refused with DUE_MESSAGE and the form reopens with its values.        *
-     *   { kind: 'create', note, tags, open }  the POST notes payload, the tag titles to attach, and whether to open the note (Create and open).         *
-     * Create and open with both fields empty creates the empty note and opens it (Joplin's own New note, one step later). A note has no due date, so   *
-     * its Due fields are neither read nor validated (switching to Note clears nothing in the form, but writes none of it). options: { defaultType,       *
-     * dayStart, notebookId, inThisNoteChoices, inThisNoteDefault } - the type a result without one reads as, the day start time, the notebook used when*
-     * the form sent none, the In this note choices the form offered (the selection and trigger routes) and the route's default choice. The plan's      *
-     * inThisNote is the choice to apply, one of those offered (anything else reads as the route's default, inThisNoteAction), or null on a route that   *
-     * offered none.                                                                                                                                      *
+     *   { kind: 'create', note, tags, open }  the POST notes payload, the tag titles to attach, and where to open the note: '' (stay), 'editor' or      *
+     *                          'window', from the Open row (openChoice: a result without the field reads as options.openDefault).                     *
+     * Create with both fields empty and the Open row on the editor or a window creates the empty note and opens it (Joplin's own New note, one step     *
+     * later); with Open on No it creates nothing. A note has no due date, so its Due fields are neither read nor validated (switching to Note clears    *
+     * nothing in the form, but writes none of it). options: { defaultType, dayStart, notebookId, inThisNoteChoices, inThisNoteDefault, mobile,           *
+     * openDefault, backlink } - the type a result without one reads as, the day start time, the notebook used when the form sent none, the In this note *
+     * choices the form offered (the selection and trigger routes) and the route's default choice, whether the Open row offered no window, the Open     *
+     * row's default, and the back link the form offered ({ text, position, on }, or null with no note to link back to). The plan's inThisNote is the    *
+     * choice to apply, one of those offered (anything else reads as the route's default, inThisNoteAction), or null on a route that offered none. The   *
+     * back link goes into the body (composeBody) when the Back link row says Add (a result without the field reads as backlink.on).                      *
      ***************************************************************************************************************************************************/
     function planCreate(result, options){
         var settings = options || {}
         var action = dialogAction(result)
         if (action === 'none') return { kind: 'none' }
         var values = readFormValues(result && result.formData, settings.defaultType)
+        var open = openChoice(values.open || settings.openDefault, settings.mobile)
         var named = applyEmptyTitleRule(values.title, values.body)
-        if (named.nothing && action === 'create') return { kind: 'nothing', values: values }
+        if (named.nothing && open === OPEN_NO) return { kind: 'nothing', values: values }
         var isTodo = values.type === TODO
         var due = isTodo ? dueTimestamp(values.dueDate, values.dueTime, settings.dayStart) : 0
         if (due === null) return { kind: 'invalidDue', values: values }
         var choices = Array.isArray(settings.inThisNoteChoices) ? settings.inThisNoteChoices : []
+        var offered = settings.backlink && text(settings.backlink.text) ? settings.backlink : null
+        var linkBack = !!offered && (values.backlink ? values.backlink === BACKLINK_ADD : !!offered.on)
         return {
             kind: 'create',
             values: values,
-            open: action === 'createAndOpen',
+            open: open === OPEN_NO ? '' : open,
             inThisNote: choices.length ? inThisNoteAction(values.inThisNote, choices, settings.inThisNoteDefault) : null,
             note: {
                 parent_id: values.notebookId || text(settings.notebookId),
                 is_todo: isTodo ? 1 : 0,
                 title: named.title,
-                body: named.body,
+                body: linkBack ? composeBody(named.body, offered.text, offered.position) : named.body,
                 todo_due: due,
             },
             tags: parseTagCsv(values.tags),
@@ -508,6 +616,15 @@
         return labels
     }
 
+    // The same, short, for the one-line segments (the full wording is the tooltip).
+    function triggerShortLabels(trigger){
+        var shown = text(trigger)
+        var labels = {}
+        labels[REMOVE] = 'Remove ' + shown
+        labels[LINK] = 'Replace ' + shown + ' with link'
+        return labels
+    }
+
     function triggerAnswer(choice, link){
         if (choice === REMOVE) return { action: REMOVE }
         if (choice === LINK && text(link)) return { action: LINK, link: text(link) }
@@ -681,6 +798,23 @@
         REPLACE: REPLACE,
         AFTER: AFTER,
         SELECTION_LABELS: SELECTION_LABELS,
+        SELECTION_SHORT_LABELS: SELECTION_SHORT_LABELS,
+        OPEN_NO: OPEN_NO,
+        OPEN_EDITOR: OPEN_EDITOR,
+        OPEN_WINDOW: OPEN_WINDOW,
+        OPEN_LABELS: OPEN_LABELS,
+        OPEN_TITLES: OPEN_TITLES,
+        BACKLINK_ADD: BACKLINK_ADD,
+        BACKLINK_NONE: BACKLINK_NONE,
+        BACKLINK_LABELS: BACKLINK_LABELS,
+        BACKLINK_TOP: BACKLINK_TOP,
+        BACKLINK_BOTTOM: BACKLINK_BOTTOM,
+        DEFAULT_BACKLINK_TEMPLATE: DEFAULT_BACKLINK_TEMPLATE,
+        openChoices: openChoices,
+        openChoice: openChoice,
+        backlinkText: backlinkText,
+        composeBody: composeBody,
+        triggerShortLabels: triggerShortLabels,
         REMOVE: REMOVE,
         LINK: LINK,
         CANCEL: CANCEL,

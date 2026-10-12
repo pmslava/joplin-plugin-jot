@@ -67,97 +67,101 @@ function readJotData(){
     }
 }
 
-/** Type *******************************************************************************************************************************************
- * The two buttons act as radios (one tab stop, the selected one; the arrow keys switch). The hidden input carries the type, the heading follows it *
- * in the wording of the form's mode (the island's: New to-do / New note, or Edit to-do / Edit note), and a note greys the Due row: its bell and No *
- * date are disabled and the picker folds. Nothing is cleared, so switching back restores the row.                                                  *
+/** Selectors ***************************************************************************************************************************************
+ * Every selector is a .jot-seg radiogroup (formHtml.ts, segmentRow): Type, In this note, Back link and Open. One tab stop, the selected button; the *
+ * arrow keys move the choice, wrapping at both ends; the hidden input named after the group's data-field carries it, so Create sends it and a      *
+ * refused Create reopens on it. setJotSeg is the one writer. A value the group does not offer resolves as each selector's rule says: Type as       *
+ * formModel.normalizeType; In this note to the route's default when drawn (the island's fallback: replace on the selection route, link on the      *
+ * trigger route, both drawn first), else the first button - formModel.inThisNoteAction's rule; the others to their first button.                 *
  ***************************************************************************************************************************************************/
-function setJotType(type){
+function jotSegGroup(field){
     var form = jotForm()
-    if (!form) return
-    var normalized = model().normalizeType(type)
-    var isNote = normalized === model().NOTE
-    jotById('jotType').value = normalized
-    var options = form.querySelectorAll('.jot-type-option')
+    return form ? form.querySelector('.jot-seg[data-field="' + field + '"]') : null
+}
+
+function jotSegOptions(group){
+    return group ? group.querySelectorAll('.jot-seg-option') : []
+}
+
+function jotSegInput(group){
+    var field = group && group.getAttribute('data-field')
+    return field && group.parentNode ? group.parentNode.querySelector('input[name="' + field + '"]') : null
+}
+
+function resolveJotSeg(field, options, value){
+    var offered = []
+    for (var index = 0; index < options.length; index++) offered.push(options[index].getAttribute('data-value'))
+    if (field === 'type') return model().normalizeType(value)
+    if (offered.indexOf(value) >= 0) return value
+    var fallback = field === 'inThisNote' && jotData.inThisNote ? jotData.inThisNote.fallback : null
+    if (fallback && offered.indexOf(fallback) >= 0) return fallback
+    return offered.length ? offered[0] : ''
+}
+
+function setJotSeg(field, value){
+    var group = jotSegGroup(field)
+    if (!group) return ''
+    var options = jotSegOptions(group)
+    var resolved = resolveJotSeg(field, options, value)
+    var input = jotSegInput(group)
+    if (input) input.value = resolved
     for (var index = 0; index < options.length; index++){
-        var selected = options[index].getAttribute('data-type') === normalized
+        var selected = options[index].getAttribute('data-value') === resolved
         options[index].classList.toggle('-selected', selected)
         options[index].setAttribute('aria-checked', selected ? 'true' : 'false')
         options[index].setAttribute('tabindex', selected ? '0' : '-1')
     }
-    jotById('jotHeading').textContent = model().headingFor(normalized, jotData.mode)
+    if (field === 'type') applyJotType(resolved)
+    return resolved
+}
+
+function onJotSegClick(event){
+    var option = event.target && event.target.closest ? event.target.closest('.jot-seg-option') : null
+    var group = option && option.closest('.jot-seg')
+    if (!option || !group) return
+    setJotSeg(group.getAttribute('data-field'), option.getAttribute('data-value'))
+    option.focus()
+}
+
+function onJotSegKeyDown(event){
+    var delta = (event.key === 'ArrowDown' || event.key === 'ArrowRight') ? 1 : ((event.key === 'ArrowUp' || event.key === 'ArrowLeft') ? -1 : 0)
+    if (!delta) return
+    event.preventDefault()
+    var group = event.currentTarget
+    var options = jotSegOptions(group)
+    var input = jotSegInput(group)
+    var current = -1
+    for (var index = 0; index < options.length; index++) if (input && options[index].getAttribute('data-value') === input.value) current = index
+    var next = model().moveHighlight(options.length, current, delta)
+    if (next < 0) return
+    setJotSeg(group.getAttribute('data-field'), options[next].getAttribute('data-value'))
+    options[next].focus()
+}
+
+/** Type *******************************************************************************************************************************************
+ * The heading follows the type in the wording of the form's mode (the island's: New to-do / New note, or Edit to-do / Edit note), and a note greys *
+ * the Due row: its bell and No date are disabled and the picker folds. Nothing is cleared, so switching back restores the row.                     *
+ ***************************************************************************************************************************************************/
+function setJotType(type){
+    return setJotSeg('type', type)
+}
+
+function applyJotType(type){
+    var form = jotForm()
+    if (!form) return
+    var isNote = type === model().NOTE
+    jotById('jotHeading').textContent = model().headingFor(type, jotData.mode)
     form.classList.toggle('-note', isNote)
     jotById('jotBell').disabled = isNote
     jotById('jotDueClear').disabled = isNote
     if (isNote) setJotPickerOpen(false)
 }
 
-function onJotTypeClick(event){
-    var option = event.target && event.target.closest ? event.target.closest('.jot-type-option') : null
-    if (!option) return
-    setJotType(option.getAttribute('data-type'))
-    option.focus()
-}
-
-function onJotTypeKeyDown(event){
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
-    event.preventDefault()
-    var next = jotById('jotType').value === model().TODO ? model().NOTE : model().TODO
-    setJotType(next)
-    var option = jotForm().querySelector('.jot-type-option[data-type="' + next + '"]')
-    if (option) option.focus()
-}
-
 /** In this note ***********************************************************************************************************************************
- * The selection and trigger routes. The buttons the host drew (the island's inThisNote.choices: Replace it with a link to the new note, Keep the   *
- * text, and in the Markdown editor Add a link after it; or Replace ++ with a link to the new note and Remove ++) act as radios, as Type's do: one    *
- * tab stop, the selected one; the arrow keys move the choice, wrapping at both ends. The hidden inThisNote carries it, so Create sends it and a      *
- * refused Create reopens on it.                                                                                                                    *
+ * The selection and trigger routes: the choice of what happens to the highlighted text or the typed trigger, a selector like the others.           *
  ***************************************************************************************************************************************************/
-function jotChoiceOptions(){
-    var form = jotForm()
-    return form ? form.querySelectorAll('.jot-choice-option') : []
-}
-
 function setJotInThisNote(choice){
-    var input = jotById('jotInThisNote')
-    if (!input) return
-    var options = jotChoiceOptions()
-    var known = false
-    for (var index = 0; index < options.length; index++) if (options[index].getAttribute('data-choice') === choice) known = true
-    // An unknown choice is the route's default when it is drawn (the island's fallback: replace on the selection route, link on the trigger
-    // route, both drawn first), else the first button drawn - formModel.inThisNoteAction's rule.
-    var fallback = jotData.inThisNote && jotData.inThisNote.fallback
-    var drawn = false
-    for (var each = 0; each < options.length; each++) if (options[each].getAttribute('data-choice') === fallback) drawn = true
-    var value = known ? choice : (drawn ? fallback : (options.length ? options[0].getAttribute('data-choice') : ''))
-    input.value = value
-    for (var row = 0; row < options.length; row++){
-        var selected = options[row].getAttribute('data-choice') === value
-        options[row].classList.toggle('-selected', selected)
-        options[row].setAttribute('aria-checked', selected ? 'true' : 'false')
-        options[row].setAttribute('tabindex', selected ? '0' : '-1')
-    }
-}
-
-function onJotChoiceClick(event){
-    var option = event.target && event.target.closest ? event.target.closest('.jot-choice-option') : null
-    if (!option) return
-    setJotInThisNote(option.getAttribute('data-choice'))
-    option.focus()
-}
-
-function onJotChoiceKeyDown(event){
-    var delta = (event.key === 'ArrowDown' || event.key === 'ArrowRight') ? 1 : ((event.key === 'ArrowUp' || event.key === 'ArrowLeft') ? -1 : 0)
-    if (!delta) return
-    event.preventDefault()
-    var options = jotChoiceOptions()
-    var current = -1
-    for (var index = 0; index < options.length; index++) if (options[index].getAttribute('data-choice') === jotById('jotInThisNote').value) current = index
-    var next = model().moveHighlight(options.length, current, delta)
-    if (next < 0) return
-    setJotInThisNote(options[next].getAttribute('data-choice'))
-    options[next].focus()
+    return setJotSeg('inThisNote', choice)
 }
 
 /** Due row ****************************************************************************************************************************************
@@ -753,9 +757,11 @@ function initJotFormIfNeeded(){
     var due = currentJotDue()
     alarmHadExistingAlarm = !!(String(due.date).trim() && String(due.time).trim())
 
-    var typeGroup = form.querySelector('.jot-type')
-    typeGroup.addEventListener('click', onJotTypeClick)
-    typeGroup.addEventListener('keydown', onJotTypeKeyDown)
+    var groups = form.querySelectorAll('.jot-seg')
+    for (var group = 0; group < groups.length; group++){
+        groups[group].addEventListener('click', onJotSegClick)
+        groups[group].addEventListener('keydown', onJotSegKeyDown)
+    }
 
     var notebook = jotById('jotNotebook')
     notebook.addEventListener('input', onJotNotebookInput)
@@ -779,12 +785,7 @@ function initJotFormIfNeeded(){
         lists[index].addEventListener('click', onJotSuggestClick)
     }
 
-    var choiceGroup = form.querySelector('.jot-choice')
-    if (choiceGroup){
-        choiceGroup.addEventListener('click', onJotChoiceClick)
-        choiceGroup.addEventListener('keydown', onJotChoiceKeyDown)
-        setJotInThisNote(jotById('jotInThisNote').value)
-    }
+    if (jotById('jotInThisNote')) setJotInThisNote(jotById('jotInThisNote').value)
 
     jotById('jotBell').addEventListener('click', onJotBellClick)
     jotById('jotDueClear').addEventListener('click', onJotDueClear)

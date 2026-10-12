@@ -115,7 +115,7 @@ test.describe('Edit mode (desktop)', () => {
     await expect(form.locator('#jotNotebook')).toHaveValue(book);
     await expect(form.locator('#jotTags')).toHaveValue(tag);
     await expect(form.locator('#jotDueText')).toHaveText('2026-12-03 14:45');
-    await expect(form.locator('.jot-type-option[data-type="todo"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(form.locator('#jotTypeRow .jot-seg-option[data-value="todo"]')).toHaveAttribute('aria-checked', 'true');
     await expect(form.locator('#jotBody')).toHaveCount(0);
     await expect(form.locator('#jotInThisNoteRow')).toHaveCount(0);
     await expect(dialogButton(win, 'Save')).toBeVisible();
@@ -145,7 +145,7 @@ test.describe('Edit mode (desktop)', () => {
     const pending = startEdit(win, id);
     const form = await formFrame(win);
     await expect(form.locator('#jotHeading')).toHaveText('Edit to-do');
-    await form.locator('.jot-type-option[data-type="note"]').click();
+    await form.locator('#jotTypeRow .jot-seg-option[data-value="note"]').click();
     await expect(form.locator('#jotHeading')).toHaveText('Edit note');
     await expect(form.locator('#jotBell')).toBeDisabled();
     await dialogButton(win, 'Save').click();
@@ -168,7 +168,7 @@ test.describe('Edit mode (desktop)', () => {
     const pending = startEdit(win, id);
     const form = await formFrame(win);
     await form.locator('#jotTitle').fill('Never saved');
-    await form.locator('.jot-type-option[data-type="note"]').click();
+    await form.locator('#jotTypeRow .jot-seg-option[data-value="note"]').click();
     await dialogButton(win, 'Cancel').click();
     await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
 

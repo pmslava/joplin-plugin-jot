@@ -71,7 +71,7 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
     }
   }
 
-  /** One of Joplin's dialog buttons, by its exact label (so "Create" never matches "Create and open"). */
+  /** One of Joplin's dialog buttons, by its exact label. */
   function dialogButton(win: Page, label: string) {
     return win.locator('.user-webview-dialog button', { hasText: new RegExp(`^${label}$`) }).last();
   }
@@ -128,13 +128,13 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
   /** Checks the In this note row of the trigger route (the two buttons with the trigger printed, the remembered default). */
   async function expectTriggerRow(form: Frame, trigger = '++'): Promise<void> {
     await expect(form.locator('#jotInThisNoteRow')).toBeVisible();
-    await expect(form.locator('.jot-choice-option')).toHaveText([`Replace ${trigger} with a link to the new note`, `Remove ${trigger}`]);
+    await expect(form.locator('#jotInThisNoteRow .jot-seg-option')).toHaveText([`Replace ${trigger} with link`, `Remove ${trigger}`]);
     await expect(form.locator('#jotInThisNote')).toHaveValue(lastChoice);
     await expect(form.locator('#jotTitle')).toHaveValue('');
   }
 
   async function choose(form: Frame, choice: string): Promise<void> {
-    await form.locator(`.jot-choice-option[data-choice="${choice}"]`).click();
+    await form.locator(`#jotInThisNoteRow .jot-seg-option[data-value="${choice}"]`).click();
     await expect(form.locator('#jotInThisNote')).toHaveValue(choice);
   }
 
@@ -247,7 +247,7 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
     await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
   });
 
-  test('Create and open: the ++ is removed from the note it was typed in, and then the new note opens in the editor', async () => {
+  test('Open on In editor: the ++ is removed from the note it was typed in, and then the new note opens in the editor', async () => {
     const { win } = joplin;
     const title = `Trigger open ${stamp}`;
     const sourceId = await openEmptyNote(win, `Source open ${stamp}`);
@@ -257,7 +257,9 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
     await expectTriggerRow(form);
     await choose(form, 'remove');
     await form.locator('#jotTitle').fill(title);
-    await dialogButton(win, 'Create and open').click();
+    await form.locator('#jotOpenRow .jot-seg-option[data-value="editor"]').click();
+    await expect(form.locator('#jotOpen')).toHaveValue('editor');
+    await dialogButton(win, 'Create').click();
     await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
     lastChoice = 'remove';
 

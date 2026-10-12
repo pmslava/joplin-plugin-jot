@@ -372,7 +372,7 @@ test.describe('README screenshots', () => {
     const form = await formFrame(win);
     await expect(form.locator('#jotTitle')).toHaveValue('Renew the travel insurance');
     await expect(form.locator('#jotBody')).toHaveValue('Compare the two annual policies by Friday.');
-    await expect(form.locator('.jot-choice-option')).toHaveText(['Replace it with a link to the new note', 'Keep the text', 'Add a link after it']);
+    await expect(form.locator('#jotInThisNoteRow .jot-seg-option')).toHaveText(['Replace with link', 'Keep text', 'Add link after']);
     await win.waitForTimeout(600);
     await shootEditorAndDialog(win, 'form-selection.png');
     await closeForm(win);
@@ -385,7 +385,7 @@ test.describe('README screenshots', () => {
     await win.keyboard.press('Control+End');
     await win.keyboard.type('Order the winter tyres ++');
     const form = await formFrame(win);
-    await expect(form.locator('.jot-choice-option')).toHaveText(['Replace ++ with a link to the new note', 'Remove ++']);
+    await expect(form.locator('#jotInThisNoteRow .jot-seg-option')).toHaveText(['Replace ++ with link', 'Remove ++']);
     await form.locator('#jotTitle').fill('Order the winter tyres');
     await typeTags(win, form, 'car');
     await form.locator('#jotTitle').click();

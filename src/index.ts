@@ -26,7 +26,7 @@ import joplin from 'api'
 import { MenuItemLocation, ToolbarButtonLocation } from 'api/types'
 import { isMobile } from './core/platform'
 import { isToolbarButtonEnabled, setupSettings } from './core/settings'
-import { openEditFromCommand, openJot, runOpenCommand } from './form/form'
+import { openEditFromCommand, openJot, refreshNotebookSetting, runOpenCommand } from './form/form'
 import { setupTrigger } from './trigger'
 
 /** Constants ***************************************************************************************************************************************/
@@ -61,6 +61,8 @@ export async function setupPlugin(){
     await setupMenu()
     await setupToolbar()
     await setupTrigger()
+    // The notebook setting's dropdown lists the notebooks that exist: read once the rest is up, and never in the way of the start.
+    void refreshNotebookSetting()
 }
 
 /** setupCommands ***********************************************************************************************************************************

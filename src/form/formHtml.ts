@@ -11,11 +11,13 @@
  * notebook id, day start time) - travels in a <script type="application/json"> element, with every "<" written as < so no value can close it.  *
  * setHtml writes the markup through innerHTML, so the element is never executed, only read.                                                         *
  *                                                                                                                                                  *
- * THE IN THIS NOTE ROW (the selection and trigger routes, after Tags and before Due): the buttons the host offers - on the selection route        *
- * Replace it with a link to the new note, Keep the text, and in the Markdown editor Add a link after it; on the trigger route Replace ++ with a    *
- * link to the new note and Remove ++, the trigger printed; the default first on both - drawn as radios in the Type toggle's pattern, with the choice in a hidden inThisNote. Their  *
- * labels come with them (inThisNoteLabels; the selection route's are formModel's SELECTION_LABELS). The island carries the same list and the        *
- * starting choice with the route's default ({ choices, value, fallback }, null on the plain routes), so the markup and the island never disagree.   *
+ * THE SELECTORS are one-line segmented controls, one builder for all (segmentRow): Type (To-do, Note); In this note on the selection and trigger    *
+ * routes (Replace with link, Keep text and, in the Markdown editor, Add link after; or Replace ++ with link and Remove ++ - short labels, the full    *
+ * wording as each button's tooltip, the default first); Back link (Add, Don't add) when there is a note to link back to, the line it would add as    *
+ * the Add button's tooltip; and Open (No, In editor, New window; no window on mobile). Each is a radiogroup of buttons over a hidden input named     *
+ * after its field, so the form sends the choice. The island carries the In this note list and the starting choice with the route's default ({       *
+ * choices, value, fallback }, null on the plain routes), so the markup and the island never disagree. Notebook and Tags stay text fields with their *
+ * suggestion lists, and Due stays last, so unfolding its picker pushes nothing down.                                                              *
  *                                                                                                                                                  *
  * EDIT MODE (view.mode "edit", brief 4.5) is the same form for an existing note: the heading says Edit to-do or Edit note, and there is no Text    *
  * and no In this note row, so Type, Title, Notebook, Tags and Due remain. The island carries the mode, so the script's heading follows the Type    *
@@ -39,6 +41,10 @@ export interface FormValues {
     dueTime: string
     // The In this note choice ("keep", "replace", "after" on the selection route, "remove", "link" on the trigger route); "" on a route without the row.
     inThisNote: string
+    // The Back link choice ("add" or "none"); "" on a route without the row.
+    backlink?: string
+    // The Open choice ("no", "editor" or "window"); "" in edit mode.
+    open?: string
 }
 
 export interface FormView {
@@ -52,11 +58,17 @@ export interface FormView {
     pickerOpen: boolean
     // The In this note buttons to draw, in order (formModel.selectionChoices or triggerChoices); empty or absent: no row.
     inThisNoteChoices?: string[]
-    // Their labels by choice (formModel.triggerLabels on the trigger route); a choice without one shows its SELECTION_LABELS label.
+    // Their short labels by choice (formModel.SELECTION_SHORT_LABELS, or triggerShortLabels on the trigger route), and their full wording as the
+    // buttons' tooltips (SELECTION_LABELS, triggerLabels). A choice without a label shows its value; without a title, its label.
     inThisNoteLabels?: { [choice: string]: string }
+    inThisNoteTitles?: { [choice: string]: string }
     // The route's default choice (formModel.SELECTION_DEFAULT or TRIGGER_DEFAULT): what a starting value the buttons do not offer reads as.
     inThisNoteDefault?: string
+    // The line the Back link row would add (formModel.backlinkText), shown as the Add button's tooltip; empty or absent: no row (no note to link to).
+    backlinkText?: string
 }
+
+interface SegmentOption { value: string; label: string; title?: string }
 
 /** Imports *****************************************************************************************************************************************/
 const FormModel = require("./formModel")
@@ -88,6 +100,25 @@ export function islandJson(data: unknown): string {
     return JSON.stringify(data).replace(/</g, "\\u003c")
 }
 
+/** segmentRow **************************************************************************************************************************************
+ * One selector: a label, a radiogroup of buttons (one tab stop, the selected one; formWebview.js moves the choice with the arrow keys), and the     *
+ * hidden input the form sends. `id` is the hidden input's id; the row is `${id}Row` and the label `${id}Label`.                                     *
+ ***************************************************************************************************************************************************/
+function segmentRow(id: string, field: string, label: string, options: SegmentOption[], selected: string, groupClass = ""): string {
+    const buttons = options.map(option => {
+        const on = option.value === selected
+        return `<button type="button" class="jot-seg-option${on ? " -selected" : ""}" data-value="${escapeHtml(option.value)}" role="radio"`
+            + ` aria-checked="${on ? "true" : "false"}" tabindex="${on ? "0" : "-1"}" title="${escapeHtml(option.title || option.label)}">`
+            + `${escapeHtml(option.label)}</button>`
+    }).join("")
+    return `
+            <div class="jot-row" id="${id}Row">
+                <span class="jot-label" id="${id}Label">${escapeHtml(label)}</span>
+                <div class="jot-seg${groupClass ? " " + groupClass : ""}" role="radiogroup" aria-labelledby="${id}Label" data-field="${field}">${buttons}</div>
+                <input type="hidden" name="${field}" id="${id}" value="${escapeHtml(selected)}">
+            </div>`
+}
+
 /** buildFormHtml ***********************************************************************************************************************************
  * The whole dialog markup for one open. `values` are the fields' starting values: the defaults on a fresh open (in edit mode, the note's), or      *
  * what the user had typed when the form is reopened after a refused Create or Save (then `pickerOpen` shows the picker, so the date that was       *
@@ -105,6 +136,10 @@ export function buildFormHtml(view: FormView): string {
     const fallback = choices.length ? FormModel.inThisNoteAction(view.inThisNoteDefault, choices) : ""
     const choice = choices.length ? FormModel.inThisNoteAction(values.inThisNote, choices, fallback) : ""
     const labels: { [choice: string]: string } = view.inThisNoteLabels || {}
+    const titles: { [choice: string]: string } = view.inThisNoteTitles || {}
+    const backlinkLine = !editing ? String(view.backlinkText || "") : ""
+    const backlink = backlinkLine ? (values.backlink === FormModel.BACKLINK_ADD ? FormModel.BACKLINK_ADD : FormModel.BACKLINK_NONE) : ""
+    const open = editing ? "" : FormModel.openChoice(values.open, view.mobile)
     const island = islandJson({
         mode: mode,
         notebooks: view.notebooks.map(item => ({ id: item.id, path: item.path })),
@@ -116,44 +151,38 @@ export function buildFormHtml(view: FormView): string {
     // A hidden marker on mobile only, as Cockpit's #cockpitPlatform: the script mirrors it onto #joplin-plugin-content as the jot-mobile class,
     // which the narrow layout in form.css is gated on (never a viewport @media query, which would also match Joplin's measuring pass).
     const platformMarker = view.mobile ? '<div id="jotPlatform" hidden></div>' : ""
-    const typeOption = (value: string, label: string) => {
-        const selected = value === type
-        return `<button type="button" class="jot-type-option${selected ? " -selected" : ""}" data-type="${value}" role="radio"`
-            + ` aria-checked="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}">${label}</button>`
-    }
-    const choiceOption = (value: string) => {
-        const selected = value === choice
-        return `<button type="button" class="jot-choice-option${selected ? " -selected" : ""}" data-choice="${escapeHtml(value)}" role="radio"`
-            + ` aria-checked="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}">${escapeHtml(labels[value] || FormModel.SELECTION_LABELS[value] || value)}</button>`
-    }
-    const inThisNoteRow = !choices.length ? "" : `
-            <div class="jot-row jot-row-top" id="jotInThisNoteRow">
-                <span class="jot-label" id="jotInThisNoteLabel">In this note</span>
-                <div class="jot-choice" role="radiogroup" aria-labelledby="jotInThisNoteLabel">
-                    ${choices.map(choiceOption).join("")}
-                </div>
-                <input type="hidden" name="inThisNote" id="jotInThisNote" value="${escapeHtml(choice)}">
-            </div>`
+    const typeRow = segmentRow("jotType", "type", "Type", [
+        { value: FormModel.TODO, label: "To-do" },
+        { value: FormModel.NOTE, label: "Note" },
+    ], type)
+    const inThisNoteRow = !choices.length ? "" : segmentRow("jotInThisNote", "inThisNote", "In this note", choices.map(value => ({
+        value,
+        label: labels[value] || value,
+        title: titles[value] || labels[value] || value,
+    })), choice, "-fill")
+    const backlinkRow = !backlink ? "" : segmentRow("jotBacklink", "backlink", "Back link", [
+        { value: FormModel.BACKLINK_ADD, label: FormModel.BACKLINK_LABELS.add, title: backlinkLine },
+        { value: FormModel.BACKLINK_NONE, label: FormModel.BACKLINK_LABELS.none },
+    ], backlink)
+    const openRow = editing ? "" : segmentRow("jotOpen", "open", "Open", FormModel.openChoices(view.mobile).map((value: string) => ({
+        value, label: FormModel.OPEN_LABELS[value], title: FormModel.OPEN_TITLES[value],
+    })), open)
     const textInput = 'autocomplete="off" autocorrect="off" autocapitalize="off"'
     // The textarea's content starts with a newline because the HTML parser drops one there: a Text that itself starts with an empty line keeps it.
     const textRow = editing ? "" : `
             <div class="jot-row jot-row-top">
                 <label class="jot-label" for="jotBody">Text</label>
-                <textarea name="body" id="jotBody" class="jot-input" rows="3" autocomplete="off">\n${escapeHtml(values.body)}</textarea>
+                <textarea name="body" id="jotBody" class="jot-input" rows="3" autocomplete="off" placeholder="Optional">\n${escapeHtml(values.body)}</textarea>
             </div>`
+    const hint = view.mobile ? "" : `<span class="jot-hint" aria-hidden="true">Enter ${editing ? "saves" : "creates"} · Esc cancels</span>`
 
     return `
         ${platformMarker}
         <script type="application/json" id="jotFormData">${island}</script>
         <form name="jot" id="jotForm" class="jot-form${isNote ? " -note" : ""}" autocomplete="off">
-            <strong id="jotHeading" class="jot-heading">${escapeHtml(FormModel.headingFor(type, mode))}</strong>
-            <div class="jot-row">
-                <span class="jot-label" id="jotTypeLabel">Type</span>
-                <div class="jot-type" role="radiogroup" aria-labelledby="jotTypeLabel">
-                    ${typeOption(FormModel.TODO, "To-do")}${typeOption(FormModel.NOTE, "Note")}
-                </div>
-                <input type="hidden" name="type" id="jotType" value="${type}">
-            </div>
+            <div class="jot-head">
+                <strong id="jotHeading" class="jot-heading">${escapeHtml(FormModel.headingFor(type, mode))}</strong>${hint}
+            </div>${typeRow}
             <div class="jot-row">
                 <label class="jot-label" for="jotTitle">Title</label>
                 <input type="text" name="title" id="jotTitle" class="jot-input" value="${escapeHtml(values.title)}" autocomplete="off" autofocus>
@@ -170,8 +199,8 @@ export function buildFormHtml(view: FormView): string {
             <div class="jot-row">
                 <label class="jot-label" for="jotTags">Tags</label>
                 <input type="text" name="tags" id="jotTags" class="jot-input" value="${escapeHtml(values.tags)}" ${textInput} spellcheck="false"
-                    role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="jotTagList">
-            </div>${inThisNoteRow}
+                    placeholder="Comma separated" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="jotTagList">
+            </div>${inThisNoteRow}${backlinkRow}${openRow}
             <div class="jot-row jot-due-row" id="jotDueRow">
                 <span class="jot-label">Due</span>
                 <span id="jotDueText" class="jot-due-text">${escapeHtml(FormModel.dueText(values.dueDate, values.dueTime))}</span>

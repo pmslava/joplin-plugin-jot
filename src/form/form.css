@@ -1,15 +1,19 @@
-/* Jot's form dialog (brief 4.1, 4.2). One narrow column of 360px on both platforms; on mobile the column takes the
- * screen's width instead. The picker section is Cockpit's set alarm dialog CSS (src/ui/alarm/alarm.ts, dialogCss),
- * with its multi-to-do rows dropped and its .cockpit-mobile gate renamed .jot-mobile.
+/* Jot's form dialog (brief 4.1, 4.2): one column, 440px on desktop; on mobile the column takes the screen's width
+ * instead. The picker section is Cockpit's set alarm dialog CSS (src/ui/alarm/alarm.ts, dialogCss), with its
+ * multi-to-do rows dropped and its .cockpit-mobile gate renamed .jot-mobile.
  *
  * The standing rules for a plugin dialog (brief section 9) bind this file: pixel sizes, no @media rule (a viewport
  * query inside a webview whose size comes from its own content is circular, and it would also match Joplin's ~200px
- * measuring pass), and suggestion lists taken out of the flow so they never change the dialog's size. */
+ * measuring pass), and suggestion lists taken out of the flow so they never change the dialog's size.
+ *
+ * Every colour comes from Joplin's theme variables, with a neutral fallback, so the form reads in every theme. Every
+ * control is one height (28px) and one radius, the labels share one column, and a selected segment changes its
+ * background and colour but never its weight, so choosing never makes a row jump. */
 
 /* Joplin sizes a fit-to-content dialog from this wrapper's bounding rect, but the wrapper stretches to the iframe,
  * which starts at a 200px minimum - so the wrapper's width is the one way to say how wide the dialog is. */
 #joplin-plugin-content {
-    width: 360px;
+    width: 440px;
 }
 /* The narrow layout is gated on the jot-mobile class, which formWebview.js puts on the wrapper only when the markup
  * carries the #jotPlatform marker (mobile), never on a viewport query (see above). */
@@ -23,51 +27,89 @@
 }
 
 .jot-form {
+    --jot-line: var(--joplin-divider-color, rgba(127, 127, 127, 0.35));
+    --jot-accent: var(--joplin-url-color, #2D6BDC);
+    --jot-focus: var(--joplin-focus-outline-color, var(--joplin-url-color, #2D6BDC));
+    --jot-hover: rgba(127, 127, 127, 0.14);
+    --jot-selected: var(--joplin-selected-color, rgba(127, 127, 127, 0.3));
+    --jot-control: 28px;
+    --jot-radius: 4px;
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 6px 4px;
+    gap: 9px;
+    padding: 2px 2px 4px;
     width: 100%;
     box-sizing: border-box;
     font-size: var(--joplin-font-size, 13px);
+    line-height: 1.35;
+}
+.jot-head {
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 7px;
+    margin-bottom: 1px;
+    border-bottom: 1px solid var(--jot-line);
 }
 .jot-heading {
+    font-size: 1.12em;
     font-weight: 600;
+    letter-spacing: 0.01em;
+}
+.jot-hint {
+    font-size: 0.85em;
+    opacity: 0.55;
+    white-space: nowrap;
 }
 .jot-row {
     display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 8px;
-    min-height: 26px;
+    gap: 10px;
+    min-height: var(--jot-control);
 }
 .jot-row-top {
     align-items: flex-start;
 }
 .jot-row-top .jot-label {
-    padding-top: 5px;
+    padding-top: 6px;
 }
 .jot-label {
-    flex: 0 0 64px;
-    opacity: 0.8;
+    flex: 0 0 82px;
+    opacity: 0.72;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .jot-input {
     flex: 1 1 auto;
     min-width: 0;
-    padding: 4px 6px;
+    height: var(--jot-control);
+    padding: 4px 8px;
     font-family: inherit;
     font-size: inherit;
     line-height: 1.35;
     color: inherit;
-    background: none;
-    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
-    border-radius: 3px;
+    background-color: transparent;
+    border: 1px solid var(--jot-line);
+    border-radius: var(--jot-radius);
     outline: none;
     box-sizing: border-box;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.jot-input::placeholder {
+    color: inherit;
+    opacity: 0.4;
+}
+.jot-input:hover {
+    border-color: rgba(127, 127, 127, 0.6);
 }
 .jot-input:focus {
-    border-color: var(--joplin-focus-outline-color, var(--joplin-url-color, #2D6BDC));
+    border-color: var(--jot-focus);
+    box-shadow: 0 0 0 1px var(--jot-focus);
 }
 /* The Notebook field is a combobox: the input takes the row's width, and the chevron sits inside its right edge (the
  * input keeps room for it), so the list it opens is placed against the input as before. */
@@ -79,13 +121,13 @@
 }
 .jot-combo .jot-input {
     width: 100%;
-    padding-right: 26px;
+    padding-right: 28px;
 }
 .jot-combo-open {
     position: absolute;
-    top: 1px;
-    right: 1px;
-    bottom: 1px;
+    top: 2px;
+    right: 2px;
+    bottom: 2px;
     width: 24px;
     display: flex;
     align-items: center;
@@ -94,88 +136,73 @@
     color: var(--joplin-color, currentColor);
     background: none;
     border: none;
-    border-radius: 2px;
-    opacity: 0.7;
+    border-radius: 3px;
+    opacity: 0.6;
     cursor: pointer;
 }
 .jot-combo-open:hover {
     opacity: 1;
-    background-color: rgba(127, 127, 127, 0.18);
+    background-color: var(--jot-hover);
 }
 .jot-combo .jot-input[aria-expanded="true"] + .jot-combo-open {
-    color: var(--joplin-url-color, #2D6BDC);
+    color: var(--jot-accent);
     opacity: 1;
 }
 textarea.jot-input {
     /* Three lines, fixed: a draggable resize handle would make the centred dialog jump as it grows. */
-    height: 64px;
+    height: 66px;
+    padding-top: 5px;
     resize: none;
 }
 
-/* Type: two buttons that act as radios. */
-.jot-type {
+/* The selectors - Type, In this note, Back link, Open: one line of segments that act as radios. A group takes the width
+ * its labels need; "-fill" (In this note) takes the row's width, its segments sharing it. A label that does not fit
+ * ends in an ellipsis and shows whole as the button's tooltip. */
+.jot-seg {
     display: inline-flex;
     flex-direction: row;
-    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
-    border-radius: 3px;
-    overflow: hidden;
-}
-.jot-type-option {
-    padding: 3px 12px;
-    font-family: inherit;
-    font-size: inherit;
-    color: inherit;
-    background: none;
-    border: none;
-    cursor: pointer;
-}
-.jot-type-option + .jot-type-option {
-    border-left: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
-}
-.jot-type-option:hover {
-    background-color: rgba(127, 127, 127, 0.18);
-}
-.jot-type-option.-selected {
-    background-color: var(--joplin-selected-color, rgba(127, 127, 127, 0.35));
-    font-weight: 600;
-}
-.jot-type-option:focus-visible {
-    outline: 1px solid var(--joplin-focus-outline-color, var(--joplin-url-color, #2D6BDC));
-    outline-offset: -2px;
-}
-
-/* In this note (the selection route): the Type toggle's radios, stacked, since their labels are long. */
-.jot-choice {
-    display: flex;
-    flex-direction: column;
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     min-width: 0;
-    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
-    border-radius: 3px;
+    max-width: 100%;
+    height: var(--jot-control);
+    border: 1px solid var(--jot-line);
+    border-radius: var(--jot-radius);
     overflow: hidden;
+    box-sizing: border-box;
 }
-.jot-choice-option {
-    padding: 3px 8px;
+.jot-seg.-fill {
+    flex: 1 1 auto;
+}
+.jot-seg-option {
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 0 12px;
     font-family: inherit;
     font-size: inherit;
-    text-align: left;
     color: inherit;
     background: none;
     border: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     cursor: pointer;
+    transition: background-color 0.12s ease;
 }
-.jot-choice-option + .jot-choice-option {
-    border-top: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
+.jot-seg.-fill .jot-seg-option {
+    flex: 1 1 auto;
 }
-.jot-choice-option:hover {
-    background-color: rgba(127, 127, 127, 0.18);
+.jot-seg-option + .jot-seg-option {
+    border-left: 1px solid var(--jot-line);
 }
-.jot-choice-option.-selected {
-    background-color: var(--joplin-selected-color, rgba(127, 127, 127, 0.35));
-    font-weight: 600;
+.jot-seg-option:hover {
+    background-color: var(--jot-hover);
 }
-.jot-choice-option:focus-visible {
-    outline: 1px solid var(--joplin-focus-outline-color, var(--joplin-url-color, #2D6BDC));
+.jot-seg-option.-selected {
+    color: var(--jot-accent);
+    background-color: var(--jot-selected);
+}
+.jot-seg-option:focus-visible {
+    outline: 2px solid var(--jot-focus);
     outline-offset: -2px;
 }
 
@@ -191,38 +218,52 @@ textarea.jot-input {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 26px;
+    flex: 0 0 auto;
+    width: 32px;
+    height: var(--jot-control);
     padding: 0;
     color: inherit;
     background: none;
-    border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
-    border-radius: 3px;
+    border: 1px solid var(--jot-line);
+    border-radius: var(--jot-radius);
     cursor: pointer;
+    transition: background-color 0.12s ease, border-color 0.12s ease;
 }
 .jot-bell:hover {
-    background-color: rgba(127, 127, 127, 0.18);
+    background-color: var(--jot-hover);
 }
 .jot-bell[aria-expanded="true"] {
-    border-color: var(--joplin-url-color, #2D6BDC);
-    background-color: var(--joplin-selected-color, rgba(127, 127, 127, 0.28));
+    color: var(--jot-accent);
+    border-color: var(--jot-accent);
+    background-color: var(--jot-selected);
 }
 .jot-link {
     padding: 0;
     font-family: inherit;
     font-size: inherit;
-    color: var(--joplin-url-color, #2D6BDC);
+    color: var(--jot-accent);
     background: none;
     border: none;
-    text-decoration: underline;
+    text-decoration: none;
     cursor: pointer;
     white-space: nowrap;
+}
+.jot-link:hover {
+    text-decoration: underline;
 }
 .jot-form.-note .jot-due-row {
     opacity: 0.45;
 }
 .jot-form.-note .jot-due-row button {
     cursor: default;
+}
+
+/* Mobile: a narrower label column, so the fields keep their width on a phone. */
+.jot-mobile .jot-label {
+    flex-basis: 72px;
+}
+.jot-mobile .jot-seg-option {
+    padding: 0 9px;
 }
 
 /* The suggestion lists. Absolutely positioned inside the form (its fixed-size box), placed under or over their input
@@ -235,12 +276,12 @@ textarea.jot-input {
     box-sizing: border-box;
     background-color: var(--joplin-background-color, #ffffff);
     border: 1px solid var(--joplin-divider-color, rgba(127, 127, 127, 0.4));
-    border-radius: 3px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    border-radius: 4px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
 }
 .jot-suggest-row {
-    height: 24px;
-    padding: 3px 6px;
+    height: 26px;
+    padding: 4px 8px;
     box-sizing: border-box;
     line-height: 18px;
     white-space: nowrap;

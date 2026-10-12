@@ -61,7 +61,7 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
     return (await findFormFrame(win)) != null;
   }
 
-  /** One of Joplin's dialog buttons, by its exact label (so "Create" never matches "Create and open"). */
+  /** One of Joplin's dialog buttons, by its exact label. */
   function dialogButton(win: Page, label: string) {
     return win.locator('.user-webview-dialog button', { hasText: new RegExp(`^${label}$`) }).last();
   }
@@ -114,11 +114,11 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
   /** Checks the In this note row (the three buttons, the remembered default) and picks `choice`. */
   async function chooseInThisNote(form: Frame, choice: string): Promise<void> {
     await expect(form.locator('#jotInThisNoteRow')).toBeVisible();
-    await expect(form.locator('.jot-choice-option')).toHaveText(['Replace it with a link to the new note', 'Keep the text', 'Add a link after it']);
+    await expect(form.locator('#jotInThisNoteRow .jot-seg-option')).toHaveText(['Replace with link', 'Keep text', 'Add link after']);
     await expect(form.locator('#jotInThisNote')).toHaveValue(lastChoice);
-    await form.locator(`.jot-choice-option[data-choice="${choice}"]`).click();
+    await form.locator(`#jotInThisNoteRow .jot-seg-option[data-value="${choice}"]`).click();
     await expect(form.locator('#jotInThisNote')).toHaveValue(choice);
-    await expect(form.locator(`.jot-choice-option[data-choice="${choice}"]`)).toHaveAttribute('aria-checked', 'true');
+    await expect(form.locator(`#jotInThisNoteRow .jot-seg-option[data-value="${choice}"]`)).toHaveAttribute('aria-checked', 'true');
   }
 
   test('replace: both lines highlighted prefill the Title and the Text; Create replaces them with [Title](:/id) and the editor keeps its note', async () => {
@@ -172,7 +172,7 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
     expect(await selectedNoteId(win)).toBe(sourceId);
   });
 
-  test('keep with Create and open: the source note is left as it was and the editor shows the new note', async () => {
+  test('keep with Open on In editor: the source note is left as it was and the editor shows the new note', async () => {
     const { win } = joplin;
     const title = `Idea ${stamp}`;
     const body = `${title}\nfor later`;
@@ -184,7 +184,9 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
     await expect(form.locator('#jotTitle')).toHaveValue(title);
     await expect(form.locator('#jotBody')).toHaveValue('for later');
     await chooseInThisNote(form, 'keep');
-    await dialogButton(win, 'Create and open').click();
+    await form.locator('#jotOpenRow .jot-seg-option[data-value="editor"]').click();
+    await expect(form.locator('#jotOpen')).toHaveValue('editor');
+    await dialogButton(win, 'Create').click();
     await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
 
     const outcome = await pending;

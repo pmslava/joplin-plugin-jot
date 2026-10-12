@@ -1,13 +1,18 @@
 /** README ******************************************************************************************************************************************
- * Jot's settings, under Settings > Plugins > Jot (brief 4.6; every label and description is the brief's, word for word, section 5, except the last *
- * sentence of the trigger's, which says when a change really applies): the five the form, the toolbar button and the typed trigger read, and the    *
- * hidden per-device memory of the In this note choice on the selection route and on the trigger route (public: false, so never on the Settings     *
- * screen; a plugin's settings are not synced, so each device remembers its own).                                                                  *
+ * Jot's settings, under Settings > Plugins > Jot: what the form starts with (the type, the notebook, the tags of the note you are in, the back     *
+ * link, whether the new note opens), the typed trigger, the day start time and the toolbar button, and the hidden per-device memory of the In this  *
+ * note choice on the selection route and on the trigger route (public: false, so never on the Settings screen; a plugin's settings are not synced,  *
+ * so each device remembers its own). The notebook, tags and back link settings answer issues 3, 1 and 2.                                           *
  *                                                                                                                                                  *
  * WHEN A CHANGED TRIGGER APPLIES. The Markdown editor's content script asks for the trigger when it loads, whenever the editor is given another note *
  * (or its text is replaced from outside, as a sync does) and after every fire (src/contentScript.ts). Settings is a screen of its own on both       *
  * platforms: opening it takes the editor down and leaving it builds a new one, which asks again - so a change applies as soon as the settings are   *
  * left (seen in the e2e app on desktop; mobile is expected to do the same, as its note screen is rebuilt, and is unchecked).                       *
+ *                                                                                                                                                  *
+ * THE NOTEBOOK SETTING is a dropdown of the notebooks that exist: "The current notebook" (the note you are in, the default) and every notebook by    *
+ * its path, stored by id. A plugin's options are fixed when it registers a setting, but Joplin (3.7.21, Setting.registerSetting) lets it register   *
+ * the same key again - the new options replace the old and the stored value is kept - so the list is registered at startup and again whenever the    *
+ * form reads a notebook list that differs (registerNotebookChoices). A stored notebook that no longer exists falls back to the current one.          *
  *                                                                                                                                                  *
  * The keyboard shortcut is not a setting: the menu item carries an accelerator, so the command is listed under Options > Keyboard Shortcuts.        *
  ***************************************************************************************************************************************************/
@@ -19,7 +24,12 @@ import { SettingItemType } from "api/types"
 /** Keys and values ********************************************************************************************************************************/
 export const SECTION = "jot"
 export const DEFAULT_TYPE_KEY = "defaultType"
-export const OPEN_TARGET_KEY = "openTarget"
+export const DEFAULT_NOTEBOOK_KEY = "defaultNotebook"
+export const COPY_TAGS_KEY = "copyTags"
+export const BACKLINK_KEY = "backlink"
+export const BACKLINK_TEMPLATE_KEY = "backlinkTemplate"
+export const BACKLINK_POSITION_KEY = "backlinkPosition"
+export const OPEN_AFTER_CREATE_KEY = "openAfterCreate"
 export const DAY_START_TIME_KEY = "dayStartTime"
 export const SHOW_TOOLBAR_BUTTON_KEY = "showToolbarButton"
 export const LAST_SELECTION_ACTION_KEY = "lastSelectionAction"
@@ -28,8 +38,16 @@ export const LAST_TRIGGER_ACTION_KEY = "lastTriggerAction"
 
 export const TYPE_TODO = "todo"
 export const TYPE_NOTE = "note"
+// The Open row's values (formModel's OPEN_NO, OPEN_EDITOR, OPEN_WINDOW).
+export const OPEN_NO = "no"
 export const OPEN_IN_EDITOR = "editor"
 export const OPEN_IN_WINDOW = "window"
+// The back link's position (formModel's BACKLINK_TOP, BACKLINK_BOTTOM) and its default text (formModel's DEFAULT_BACKLINK_TEMPLATE).
+export const BACKLINK_TOP = "top"
+export const BACKLINK_BOTTOM = "bottom"
+export const DEFAULT_BACKLINK_TEMPLATE = "Parent {note_type}: {note_link}"
+// The notebook setting's "The current notebook" value.
+export const CURRENT_NOTEBOOK = ""
 // The In this note choices (formModel's KEEP, REPLACE, AFTER); replace is the default until the user picks another (formModel.SELECTION_DEFAULT).
 // An install that already remembers another choice keeps it.
 export const SELECTION_REPLACE = "replace"
@@ -40,6 +58,27 @@ export const TRIGGER_LINK = "link"
 export const DEFAULT_TRIGGER = "++"
 
 const TriggerRule = require("../form/triggerRule")
+
+/** notebookSettingSpec *****************************************************************************************************************************
+ * The notebook setting, with its options: "The current notebook" first, then every notebook by path ({ id, path }, sorted, as the form shows them).  *
+ ***************************************************************************************************************************************************/
+function notebookSettingSpec(notebooks: { id: string, path: string }[]){
+    const options: { [id: string]: string } = { [CURRENT_NOTEBOOK]: "The current notebook" }
+    for (const notebook of notebooks) options[notebook.id] = notebook.path
+    return {
+        label: "Notebook",
+        description: "Where Jot creates a note unless you pick another in the form: the notebook of the note you are in, or always the same notebook, such as an inbox. Notebooks made later appear here once Jot has been used.",
+        value: CURRENT_NOTEBOOK,
+        type: SettingItemType.String,
+        isEnum: true,
+        options,
+        public: true,
+        section: SECTION,
+    }
+}
+
+// The notebook list the setting was last registered with, as a signature, so an unchanged list is not registered again.
+let registeredNotebooks: string | null = null
 
 /** setupSettings ***********************************************************************************************************************************
  * Registers the section and its settings. Runs first in onStart, as the toolbar button's startup gate reads one of them.                           *
@@ -64,13 +103,52 @@ export async function setupSettings(){
             public: true,
             section: SECTION,
         },
-        [OPEN_TARGET_KEY]: {
-            label: "Create and open opens the note",
-            description: "In the editor, or in a new window on desktop. Create (without \"and open\") never opens anything.",
-            value: OPEN_IN_EDITOR,
+        [DEFAULT_NOTEBOOK_KEY]: notebookSettingSpec([]),
+        [COPY_TAGS_KEY]: {
+            label: "Fill in the tags of the note you are in",
+            description: "The form's Tags start with the tags of the note you are in, when there is one. Change or clear them in the form.",
+            value: true,
+            type: SettingItemType.Bool,
+            public: true,
+            section: SECTION,
+        },
+        [BACKLINK_KEY]: {
+            label: "Add a back link to the note you are in",
+            description: "Where the form's Back link starts. You can switch it in the form.",
+            value: false,
+            type: SettingItemType.Bool,
+            public: true,
+            section: SECTION,
+        },
+        [BACKLINK_TEMPLATE_KEY]: {
+            label: "Back link text",
+            description: "Placeholders for the note you are in: {note_link} (a Markdown link to it), {note_title}, {note_id}, {note_type} (to-do or note), {notebook_name}, {notebook_path} (such as Work/Projects), {notebook_id}. Empty means the default, Parent {note_type}: {note_link}.",
+            value: DEFAULT_BACKLINK_TEMPLATE,
+            type: SettingItemType.String,
+            public: true,
+            section: SECTION,
+        },
+        [BACKLINK_POSITION_KEY]: {
+            label: "Back link position",
+            description: "The back link's own line, with an empty line between it and the text.",
+            value: BACKLINK_TOP,
             type: SettingItemType.String,
             isEnum: true,
             options: {
+                [BACKLINK_TOP]: "First line, above the text",
+                [BACKLINK_BOTTOM]: "Last line, below the text",
+            },
+            public: true,
+            section: SECTION,
+        },
+        [OPEN_AFTER_CREATE_KEY]: {
+            label: "Open the new note",
+            description: "Where the form's Open starts: stay where you are, open the note in the editor, or in a new window (desktop). You can switch it in the form.",
+            value: OPEN_NO,
+            type: SettingItemType.String,
+            isEnum: true,
+            options: {
+                [OPEN_NO]: "No, stay where you are",
                 [OPEN_IN_EDITOR]: "In the editor",
                 [OPEN_IN_WINDOW]: "In a new window",
             },
@@ -126,12 +204,54 @@ export async function getDefaultType(){
     return value === TYPE_NOTE ? TYPE_NOTE : TYPE_TODO
 }
 
-/** getOpenTarget ***********************************************************************************************************************************
- * Where Create and open opens the note, "editor" or "window"; anything unreadable is the editor, the setting's default.                            *
+/** getOpenAfterCreate ******************************************************************************************************************************
+ * Where the Open row starts, "no", "editor" or "window"; anything unreadable is "no", the setting's default.                                      *
  ***************************************************************************************************************************************************/
-export async function getOpenTarget(){
-    var value = await joplin.settings.value(OPEN_TARGET_KEY)
-    return value === OPEN_IN_WINDOW ? OPEN_IN_WINDOW : OPEN_IN_EDITOR
+export async function getOpenAfterCreate(){
+    var value = await joplin.settings.value(OPEN_AFTER_CREATE_KEY)
+    return value === OPEN_IN_EDITOR || value === OPEN_IN_WINDOW ? value : OPEN_NO
+}
+
+/** getDefaultNotebookId ****************************************************************************************************************************
+ * The notebook the setting names, or "" for the current notebook (also when it cannot be read).                                                   *
+ ***************************************************************************************************************************************************/
+export async function getDefaultNotebookId(): Promise<string> {
+    try {
+        return String((await joplin.settings.value(DEFAULT_NOTEBOOK_KEY)) || "")
+    } catch (error) {
+        console.warn("Jot: could not read the notebook setting, using the current notebook", error)
+        return CURRENT_NOTEBOOK
+    }
+}
+
+/** getCopyTags / getBacklinkSettings ***************************************************************************************************************
+ * Whether the Tags start with the current note's tags (on unless switched off); and the back link's default, text and position (off; the default    *
+ * text when empty; top unless bottom).                                                                                                             *
+ ***************************************************************************************************************************************************/
+export async function getCopyTags(): Promise<boolean> {
+    return (await joplin.settings.value(COPY_TAGS_KEY)) !== false
+}
+
+export async function getBacklinkSettings(): Promise<{ on: boolean, template: string, position: string }> {
+    const on = (await joplin.settings.value(BACKLINK_KEY)) === true
+    const template = String((await joplin.settings.value(BACKLINK_TEMPLATE_KEY)) || "").trim() || DEFAULT_BACKLINK_TEMPLATE
+    const position = (await joplin.settings.value(BACKLINK_POSITION_KEY)) === BACKLINK_BOTTOM ? BACKLINK_BOTTOM : BACKLINK_TOP
+    return { on, template, position }
+}
+
+/** registerNotebookChoices *************************************************************************************************************************
+ * Registers the notebook setting again with `notebooks` ({ id, path }, sorted) as its options, when they differ from the list registered last. The   *
+ * stored value is kept (see the README). Never throws: a refusal is a console warning, and the setting keeps its last options.                     *
+ ***************************************************************************************************************************************************/
+export async function registerNotebookChoices(notebooks: { id: string, path: string }[]): Promise<void> {
+    const signature = JSON.stringify(notebooks.map(notebook => [notebook.id, notebook.path]))
+    if (signature === registeredNotebooks) return
+    try {
+        await joplin.settings.registerSettings({ [DEFAULT_NOTEBOOK_KEY]: notebookSettingSpec(notebooks) })
+        registeredNotebooks = signature
+    } catch (error) {
+        console.warn("Jot: could not update the notebook list in Settings", error)
+    }
 }
 
 /** getDayStartTime *********************************************************************************************************************************

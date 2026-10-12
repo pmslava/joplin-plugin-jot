@@ -6,7 +6,7 @@ Quick capture of a note or to-do without leaving the one you are in.
 
 While you read or work in one note, Jot opens a small form for the title, a line or two of text, the notebook, tags and the due date, creates the note from it, and does not open it. You stay where you were. Joplin's own New note and New to-do create an empty note and open it, and Back lands at the top of the note you were reading; Jot exists so that never happens.
 
-0.1.0 is the first release. The desktop is tested; Android is not yet, see the known limits below.
+The desktop is tested; Android is not yet, see the known limits below.
 
 ## Install
 
@@ -30,19 +30,35 @@ In Joplin, Settings › Plugins › search for Jot and install it. Or download `
 
 ## The form
 
-Type (To-do or Note), Title, Text, Notebook, Tags and Due. The title is focused when the form opens, so typing a title and pressing Enter is all a capture needs. Notebook and Tags filter a list as you type, and Enter picks the highlighted row; the notebook starts on the one you are in. Due shows the date and time beside a bell; the bell unfolds Cockpit's date picker, the calendar, the time columns and the quick buttons, and every pick writes into the row at once. A to-do whose date is picked before its time starts at the day start time.
+Type, Title, Text, Notebook, Tags, then the choices, and Due last. The title is focused when the form opens, so typing a title and pressing Enter is all a capture needs. Every choice is one line of buttons you click or move through with the arrow keys:
+
+- **Type**: To-do or Note.
+- **In this note**, when the form was opened from highlighted text: Replace with link (the default), Keep text, or Add link after. Opened by `++`: Replace `++` with link (the default) or Remove `++`. Jot remembers your last choice for each.
+- **Back link**: Add puts a line linking to the note you are in at the top of the new note, then an empty line, then the text (or at the bottom, by setting). Hover Add to see the line. It starts on the setting, Don't add unless you change it.
+- **Open**: No (stay where you are, the default), In editor, or New window. It starts on the setting.
+
+**Notebook** starts on the notebook of the note you are in, or on the notebook the setting names, such as an inbox. **Tags** start with the tags of the note you are in, so clearing what does not fit is all it takes. Both filter a list as you type, and Enter picks the highlighted row.
+
+**Due** shows the date and time beside a bell. The bell unfolds Cockpit's date picker, the calendar, the time columns and the quick buttons, and every pick writes into the row at once. A to-do whose date is picked before its time starts at the day start time.
 
 <img src="docs/images/form-picker.png" width="428" alt="The form with the date picker unfolded under the Due row: the date and time, the quick buttons, the calendar and the time columns">
 
-**Create** writes the note and stays where you are. **Create and open** opens it, in the editor or in a new window by setting. A form with no title and no text creates nothing. An empty title with text takes the first line of the text as the title.
-
-When the form was opened from highlighted text, an **In this note** row asks what to do with that text: replace it with a link to the new note (the default), keep it, or add a link after it. When it was opened by `++`, the row asks whether to replace the `++` with the link (the default) or remove it. Jot remembers your last choice for each.
+**Create** writes the note and opens it only if Open says so. **Cancel**, or Escape, writes nothing. A form with no title and no text creates nothing. An empty title with text takes the first line of the text as the title.
 
 ## Settings
 
-Settings › Plugins › Jot: what Jot creates by default (a to-do or a note), where Create and open opens the note (the editor, or a new window on desktop), the typed trigger, the day start time, and whether the toolbar button is shown (after a restart, since Joplin cannot add or remove a toolbar button while running).
+Settings › Plugins › Jot:
 
-## Known limits of 0.1.0
+- **What Jot creates**: a to-do or a note.
+- **Notebook**: The current notebook (the one of the note you are in), or any notebook, such as an inbox. Notebooks made later appear in the list once Jot has been used.
+- **Fill in the tags of the note you are in**: on by default.
+- **Add a back link to the note you are in**: off by default; the form's Back link starts here.
+- **Back link text**: `Parent {note_type}: {note_link}` by default. The placeholders are Copy Note ID's, for the note you are in: `{note_link}`, `{note_title}`, `{note_id}`, `{note_type}` (to-do or note), `{notebook_name}`, `{notebook_path}` (such as `Work/Projects`) and `{notebook_id}`. So `Extracted from: {note_link}` works too.
+- **Back link position**: the first line, above the text (default), or the last line, below it.
+- **Open the new note**: No, In the editor, or In a new window; the form's Open starts here.
+- **Typed trigger**, **Day start time**, and **Show the Jot button in the note toolbar** (after a restart, since Joplin cannot add or remove a toolbar button while running).
+
+## Known limits
 
 - Nothing has been checked on Android yet. The plugin installs there, but the form, the toolbar button and the trigger are untested on a phone.
 - In the Rich Text editor the typed trigger does not work (no plugin code runs there), and "Add a link after it" is not offered; the shortcut and the right-click entry work, and "Replace it with a link" writes the link as HTML.
