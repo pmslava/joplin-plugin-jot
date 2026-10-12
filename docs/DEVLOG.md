@@ -24,10 +24,12 @@ A plugin cannot stop the refresh, and Joplin has no command that selects a note 
 
 The same day, Ctrl+Shift+J sometimes opened Firefox's Browser Console: that is Firefox's own shortcut, pressed while Firefox had the keyboard focus; Jot never receives keys while another application is focused.
 
-## 2026-10-12 — unreleased: issues 1 to 3 and a calmer form
+## 2026-10-12 — v0.2.0: issues 1 to 3 and a calmer form
 
 Three requests from CJeffyB, who wants to retire Convert Text To New Note and a pair of note templates in Jot's favour. **Issue 1**: the Tags start with the tags of the note you are in (setting on by default). **Issue 2**: a back link to that note, with Copy Note ID's placeholders (`{note_link}`, `{note_title}`, `{note_id}`, `{note_type}`, `{notebook_name}`, `{notebook_path}`, `{notebook_id}`, forgiving names, unknown ones kept), default text `Parent {note_type}: {note_link}`, its own line first (default) or last with an empty line between it and the text; off by default, and the form's Back link row (Add / Don't add) starts on the setting. **Issue 3**: a notebook setting, The current notebook or any existing notebook (an inbox); a plugin's enum options are fixed at registration, but Joplin 3.7.21's `Setting.registerSetting` takes the same key again with new options and keeps the stored value, so the list is registered at startup and again whenever the form reads a changed notebook list.
 
 The form, per Slava: two buttons (Create, Cancel), the old Create and open replaced by an **Open** row (No by default, In editor, New window; a setting `openAfterCreate` replaces `openTarget`), every selector one line of segments (Type, In this note with short labels and the full wording as tooltips, Back link, Open), a 440px column, one control height, a heading with a keyboard hint, and selected segments that change colour but never weight. Reading the form's lists now asks for 100 items a page instead of the data API's default 10, and the form's reads run in parallel.
 
 Harness 125 (26 checks retargeted for the new markup, settings and buttons, each named in the commit; 8 new). E2E 30, including `e2e/requests.spec.ts`, which picks the inbox from the Settings dropdown as a user would; the README screenshots were recaptured with `SHOWCASE=1`.
+
+After Slava's first try, two more fixes went in before the release: Enter with an empty Title keeps the form open and focuses the Title (Joplin's own Enter would have closed it with nothing created), and Enter outside a text input - after a date picked with the mouse, on a segment, with nothing focused - submits through the form's submit event, since Joplin submits on Enter only in a text input. The current note's tags end with a comma and a space. Harness 127, e2e 33.
