@@ -723,6 +723,24 @@ function applyJotPlatformClass(){
  * while a document is parsing, and this markup arrives later, so the focus is given here - and once more when the dialog's frame itself receives the *
  * focus (Joplin focuses it when the dialog is ready), in case that came after.                                                                       *
  ***************************************************************************************************************************************************/
+/** Enter with no title ****************************************************************************************************************************
+ * Joplin submits the form on Enter in any text input (its own keydown listener on the dialog's document, in the bubble phase). With the Title empty  *
+ * that would close the form having created nothing (in edit mode, save a note called Untitled), so that Enter is kept from Joplin and the Title gets  *
+ * the focus instead. The listener sits on the form, in the bubble phase, so an open suggestion list takes its own Enter first (its handler stops     *
+ * the event at the input). Enter in the Text is a new line and never reaches here as a submit; Create clicked with the mouse still applies the       *
+ * empty-title rule.                                                                                                                                *
+ ***************************************************************************************************************************************************/
+function onJotFormKeyDown(event){
+    if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return
+    var target = event.target
+    if (!target || target.tagName !== 'INPUT') return
+    var title = jotById('jotTitle')
+    if (!title || String(title.value).trim()) return
+    event.stopPropagation()
+    event.preventDefault()
+    title.focus()
+}
+
 function focusJotTitle(){
     var title = jotById('jotTitle')
     if (!title) return
@@ -791,6 +809,7 @@ function initJotFormIfNeeded(){
     jotById('jotDueClear').addEventListener('click', onJotDueClear)
     // A real submission would navigate the iframe away; Joplin's own listener on the document still hears the event and runs Create.
     form.addEventListener('submit', function(event){ event.preventDefault() })
+    form.addEventListener('keydown', onJotFormKeyDown)
 
     setJotType(jotById('jotType').value)
     writeJotDue(due.date, due.time)

@@ -30,14 +30,14 @@ In Joplin, Settings › Plugins › search for Jot and install it. Or download `
 
 ## The form
 
-Type, Title, Text, Notebook, Tags, then the choices, and Due last. The title is focused when the form opens, so typing a title and pressing Enter is all a capture needs. Every choice is one line of buttons you click or move through with the arrow keys:
+Type, Title, Text, Notebook, Tags, then the choices, and Due last. The title is focused when the form opens, so typing a title and pressing Enter is all a capture needs; Enter with the title still empty keeps the form open and puts the cursor back in the title. Every choice is one line of buttons you click or move through with the arrow keys:
 
 - **Type**: To-do or Note.
 - **In this note**, when the form was opened from highlighted text: Replace with link (the default), Keep text, or Add link after. Opened by `++`: Replace `++` with link (the default) or Remove `++`. Jot remembers your last choice for each.
 - **Back link**: Add puts a line linking to the note you are in at the top of the new note, then an empty line, then the text (or at the bottom, by setting). Hover Add to see the line. It starts on the setting, Don't add unless you change it.
 - **Open**: No (stay where you are, the default), In editor, or New window. It starts on the setting.
 
-**Notebook** starts on the notebook of the note you are in, or on the notebook the setting names, such as an inbox. **Tags** start with the tags of the note you are in, so clearing what does not fit is all it takes. Both filter a list as you type, and Enter picks the highlighted row.
+**Notebook** starts on the notebook of the note you are in, or on the notebook the setting names, such as an inbox. **Tags** start with the tags of the note you are in, followed by a comma and a space, so you can clear what does not fit or type the next tag straight away. Both filter a list as you type, and Enter picks the highlighted row.
 
 **Due** shows the date and time beside a bell. The bell unfolds Cockpit's date picker, the calendar, the time columns and the quick buttons, and every pick writes into the row at once. A to-do whose date is picked before its time starts at the day start time.
 

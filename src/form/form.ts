@@ -378,12 +378,13 @@ export async function refreshNotebookSetting(): Promise<void> {
 }
 
 /** readNoteTagsCsv *********************************************************************************************************************************
- * The tags of a note as the Tags field shows them: titles, comma separated, sorted. "" when they cannot be read (a console warning).             *
+ * The tags of a note as the Tags field starts with them: titles, sorted, each followed by a comma and a space, so the next tag is typed straight     *
+ * after them (parseTagCsv drops the empty last one). "" when the note has none or they cannot be read (a console warning).                        *
  ***************************************************************************************************************************************************/
 async function readNoteTagsCsv(noteId: string): Promise<string> {
     try {
         const tags = await getAllPages(["notes", noteId, "tags"], ["id", "title"])
-        return tags.map(tag => String(tag.title || "")).filter(title => !!title).sort().join(", ")
+        return tags.map(tag => String(tag.title || "")).filter(title => !!title).sort().map(title => title + ", ").join("")
     } catch (error) {
         console.warn("Jot: could not read the tags of the note you are in", error)
         return ""

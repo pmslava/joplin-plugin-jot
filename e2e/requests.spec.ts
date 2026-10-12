@@ -82,12 +82,29 @@ test.describe('The 0.2 requests (desktop)', () => {
     expect(await pending).toBeNull();
   });
 
+  test('Enter with the Title empty keeps the form open and focuses the Title; with a title it creates', async () => {
+    const { win } = joplin;
+    const title = `Entered ${stamp}`;
+    const pending = startJot(win);
+    const form = await formFrame(win);
+    await form.locator('#jotTags').click();
+    await win.keyboard.press('Enter');
+    await win.waitForTimeout(800);
+    expect(await findFormFrame(win)).not.toBeNull();
+    await expect.poll(async () => form.evaluate(() => document.activeElement && document.activeElement.id), { timeout: 5_000 }).toBe('jotTitle');
+    await win.keyboard.type(title);
+    await win.keyboard.press('Enter');
+    const outcome: any = await pending;
+    expect(outcome && outcome.id).toBeTruthy();
+    expect((await api.get(`/notes/${outcome.id}?fields=title`)).title).toBe(title);
+  });
+
   test('issue 1: the Tags start with the tags of the note you are in, and the new note gets them', async () => {
     const { win } = joplin;
     const title = `Tagged ${stamp}`;
     const pending = startJot(win);
     const form = await formFrame(win);
-    await expect(form.locator('#jotTags')).toHaveValue(`alpha-${stamp}, beta-${stamp}`);
+    await expect(form.locator('#jotTags')).toHaveValue(`alpha-${stamp}, beta-${stamp}, `);
     await form.locator('#jotTitle').fill(title);
     await dialogButton(win, 'Create').click();
     const outcome: any = await pending;

@@ -2071,6 +2071,16 @@ async function main() {
         for (const gone of ['alarmIsMulti', 'describeAlarmPlan', 'applyAlarmPlan', 'onAlarmModeChanged']) assert.ok(!glue.includes(gone), `${gone} is not ported`)
     })
 
+    await check('dialog glue: Enter in a text input with the Title empty is kept from Joplin (it would close the form with nothing created) and focuses the Title; an open suggestion list takes its Enter first', () => {
+        const glue = read('src/form/formWebview.js')
+        assert.ok(glue.includes("form.addEventListener('keydown', onJotFormKeyDown)"), 'on the form, in the bubble phase: after the input\'s own list handler, before Joplin\'s document listener')
+        const rule = glue.slice(glue.indexOf('function onJotFormKeyDown'), glue.indexOf('function focusJotTitle'))
+        assert.ok(rule.includes("if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return"), 'Enter only, never mid-composition')
+        assert.ok(rule.includes("if (!target || target.tagName !== 'INPUT') return"), 'text inputs only: a new line in the Text stays a new line')
+        assert.ok(rule.includes('if (!title || String(title.value).trim()) return'), 'a Title with text submits as before')
+        assert.ok(rule.includes('event.stopPropagation()') && rule.includes('event.preventDefault()') && rule.includes('title.focus()'))
+    })
+
     await check('dialog glue: every selector (Type, In this note, Back link, Open) is one generic radiogroup - click, arrow keys wrapping through moveHighlight, the hidden input written; In this note falls back to the route\'s default, else the first button drawn; one line, never stacked', () => {
         const glue = read('src/form/formWebview.js')
         assert.ok(glue.includes("var groups = form.querySelectorAll('.jot-seg')") && glue.includes("groups[group].addEventListener('click', onJotSegClick)")
@@ -2337,7 +2347,7 @@ async function main() {
 
     await check('issue 1: the Tags start with the tags of the note you are in (setting on by default); off, nothing is read; the caller\'s route and no note read none', async () => {
         const on = await openFormWith({ selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS, dialogResults: [formResult('ok', { title: 'Idea', tags: 'idea, work' })] })
-        assert.strictEqual(tagsValue(on.state.dialogHtml[0]), 'idea, work', 'sorted, comma separated')
+        assert.strictEqual(tagsValue(on.state.dialogHtml[0]), 'idea, work, ', 'sorted, comma separated, and a comma and a space after the last, so the next is typed straight on')
         assert.deepStrictEqual(noteReads(on.state), ['notes/nOpen/tags id,title'])
         assert.deepStrictEqual(on.state.timeline.filter(line => line.startsWith('POST tags')), ['POST tags/tIdea/notes', 'POST tags/tWork/notes'])
         const off = await openFormWith({ selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS, settings: { copyTags: false } })
