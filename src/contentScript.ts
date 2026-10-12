@@ -28,11 +28,16 @@
  *                                                                                                                                                  *
  * DOUBLE MOUNT. Mobile mounts content scripts twice on the same editor (joplin#12891); a registry on window keyed by the EditorView makes the second   *
  * mount a no-op (Harper's guard), so the trigger can never fire twice.                                                                             *
+ *                                                                                                                                                  *
+ * THE VIEW COMMANDS. jot.getView and jot.setView, registered on the editor control (editor.execCommand reaches them), serve src/form/selectionGuard.ts:*
+ * Joplin can select another note while Jot writes tags, and Jot opens the note being read again; getView answers { noteId, scrollTop, anchor, head,  *
+ * docLength, focused } before the write, setView puts the scroll offset, the caret and the focus back once the editor holds that note again, and     *
+ * refuses a view of another note. The note id is the one Joplin's last note switch carried (null until the first switch this script sees).          *
  ***************************************************************************************************************************************************/
 
 /** Imports *****************************************************************************************************************************************/
 import { EditorView, ViewUpdate } from '@codemirror/view'
-import { ChangeDesc, Text, Transaction } from '@codemirror/state'
+import { ChangeDesc, EditorSelection, Text, Transaction } from '@codemirror/state'
 const TriggerRule = require('./form/triggerRule')
 
 /** Types *******************************************************************************************************************************************/
@@ -48,7 +53,11 @@ interface CodeMirrorControl {
     cm6?: unknown
     editor?: EditorView
     addExtension: (extension: unknown) => void
+    registerCommand?: (name: string, callback: (...args: unknown[]) => unknown) => void
 }
+
+// What jot.getView answers and jot.setView takes (src/form/selectionGuard.ts, EditorViewState).
+interface ViewState { noteId: string | null; scrollTop: number; anchor: number; head: number; docLength: number; focused: boolean }
 
 interface Range { from: number; to: number }
 interface Occurrence { from: number; to: number; text: string }
@@ -89,10 +98,15 @@ function alreadyActivated(view: unknown): boolean {
  * switch), or it has no user event and replaces the whole previous document in one change (Joplin's updateBody: another note, or the open note's     *
  * text replaced from outside, as a sync does).                                                                                                       *
  ***************************************************************************************************************************************************/
-function switchesDocument(tr: Transaction): boolean {
+function effectNoteId(tr: Transaction): string | null {
     for (const effect of tr.effects) {
-        if (typeof effect.value === 'string' && NOTE_ID.test(effect.value)) return true
+        if (typeof effect.value === 'string' && NOTE_ID.test(effect.value)) return effect.value
     }
+    return null
+}
+
+function switchesDocument(tr: Transaction): boolean {
+    if (effectNoteId(tr)) return true
     if (!tr.docChanged || tr.annotation(Transaction.userEvent) !== undefined) return false
     let changes = 0
     let whole = false
@@ -140,13 +154,50 @@ class TriggerWatcher {
     private cancelled: Occurrence[] = []
     private deferred: Range[] = []
     private pending: Pending | null = null
+    private noteId: string | null = null
 
     constructor(private context: ContentScriptContext) {}
+
+    /** viewState: what jot.getView answers - the note this editor holds (once Joplin has said), the scroll offset, the main selection, the focus. */
+    viewState(view: EditorView): ViewState {
+        const main = view.state.selection.main
+        return {
+            noteId: this.noteId,
+            scrollTop: view.scrollDOM ? view.scrollDOM.scrollTop : 0,
+            anchor: main.anchor,
+            head: main.head,
+            docLength: view.state.doc.length,
+            focused: !!view.hasFocus,
+        }
+    }
+
+    /** restoreView: jot.setView - the caret (clamped to the document), the scroll offset and the focus as they were; null for a view of another note. */
+    restoreView(view: EditorView, state: unknown): ViewState | null {
+        if (!state || typeof state !== 'object') return null
+        const wanted = state as Partial<ViewState>
+        if (wanted.noteId && this.noteId && wanted.noteId !== this.noteId) return null
+        const length = view.state.doc.length
+        const clamp = (value: unknown) => {
+            const number = Math.floor(Number(value))
+            return Number.isFinite(number) ? Math.max(0, Math.min(length, number)) : 0
+        }
+        try {
+            view.dispatch({ selection: EditorSelection.single(clamp(wanted.anchor), clamp(wanted.head)) })
+        } catch (error) {
+            console.warn('Jot: could not put the caret back', error)
+        }
+        const scrollTop = Number(wanted.scrollTop)
+        if (view.scrollDOM && Number.isFinite(scrollTop)) view.scrollDOM.scrollTop = scrollTop
+        if (wanted.focused && typeof view.focus === 'function') view.focus()
+        return this.viewState(view)
+    }
 
     /** onUpdate: maps what is kept through the update's changes, collects the typed insertions, and puts them to the rule once nothing composes. */
     onUpdate(update: ViewUpdate): void {
         let typed: Range[] = []
         for (const tr of update.transactions) {
+            const switchedTo = effectNoteId(tr)
+            if (switchedTo) this.noteId = switchedTo
             if (switchesDocument(tr)) {
                 typed = []
                 this.deferred = []
@@ -310,6 +361,15 @@ export default (context: ContentScriptContext) => {
                     },
                 }),
             ])
+            const view = (editorControl.editor || editorControl.cm6) as EditorView
+            if (typeof editorControl.registerCommand === 'function') {
+                try {
+                    editorControl.registerCommand('jot.getView', () => watcher.viewState(view))
+                    editorControl.registerCommand('jot.setView', (state: unknown) => watcher.restoreView(view, state))
+                } catch (error) {
+                    console.warn('Jot: could not register the editor view commands; a note Joplin moves off is opened again at its top', error)
+                }
+            }
             watcher.refreshConfig()
         },
     }

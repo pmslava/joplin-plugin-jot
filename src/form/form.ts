@@ -17,20 +17,27 @@
  *                                                                                                                                                  *
  * THE SELECTION ROUTE. openJot(route) is what the three commands run: it reads the editor's selection first (editorSelection.ts) and, when there is  *
  * one, opens the form on the 'selection' route, prefilled from it (formModel.splitSelection), with the In this note row; with none, the route it    *
- * was given, the plain form. After a create on that route the choice is applied to the editor while it still holds the note the selection came    *
- * from - after POST notes and the tags, BEFORE anything is opened (Create and open would switch the editor to the new note, and the edit would     *
- * land there) - and remembered in lastSelectionAction for next time.                                                                               *
+ * was given, the plain form. After a create on that route the choice is applied to the editor while it surely holds the note the selection came   *
+ * from - right after POST notes, BEFORE the tags (writing a tag can make Joplin select another note, see below) and before anything is opened       *
+ * (Create and open would switch the editor to the new note, and the edit would land there) - and remembered in lastSelectionAction for next time.   *
  *                                                                                                                                                  *
  * THE TRIGGER ROUTE. openTriggerForm(trigger) is what the typed trigger's message runs (src/trigger.ts): the plain form with no prefill, plus the In *
  * this note row with Replace ++ with a link to the new note and Remove ++ (the trigger printed), starting on lastTriggerAction. The edit is not      *
  * made here: the content script makes it in the editor, as one transaction, once it has the answer this resolves ({ action: 'remove' }, { action:  *
  * 'link', link } or { action: 'cancel' }), and the choice is remembered after the create. Create and open therefore does not open at once - the     *
  * editor would switch to the new note before the content script's edit reached the note the trigger was typed in - but puts the new note's id in    *
- * the answer (open); the content script makes its edit and then asks for the open (openTriggerNote), which opens that one id only, once.           *
+ * the answer (open); the content script makes its edit and then asks for the open (openTriggerNote), which opens that one id only, once. The tags   *
+ * wait too: they are written after the answer has gone (writeTriggerTags, GUARD_TIMING.triggerEditMs later), so a selection Joplin moves while they  *
+ * are written cannot take the edit's note away first.                                                                                              *
+ *                                                                                                                                                  *
+ * THE SELECTION GUARD (selectionGuard.ts). Writing a tag makes Joplin refresh the note list and select a note again, and in All notes that is the     *
+ * list's first note - the one just created; moving a listed note to another notebook selects its neighbour. So every tag write (Create's, Save's)    *
+ * and every notebook change in edit mode is bracketed by holdSelection / keepSelection, which open the note being read again, with its scroll and     *
+ * caret, when Joplin moved off it. Not when the note is about to be opened anyway (Create and open).                                               *
  *                                                                                                                                                  *
  * Every decision is formModel.js's (planCreate and the rules under it), so this file is the I/O around it: the notebooks and tags read from the     *
  * data API, the dialog, the POST notes, the tags (reused as Joplin matches titles, created when missing, attached; never fatal), and the open.     *
- * Create opens nothing and moves no focus: the editor keeps its note.                                                                              *
+ * Create opens nothing and moves no focus: the editor keeps its note, and the selection guard keeps it there when Joplin would not.               *
  *                                                                                                                                                  *
  * THE DIALOGS. Two handles, because buttons are set per handle: jot.form for create mode, with Create (id ok, which Enter in a text input          *
  * resolves to), Create and open (id openAfter) and Cancel (id cancel, which Escape resolves to); jot.edit for edit mode, with Save (id ok) and     *
@@ -49,6 +56,7 @@ import {
 } from "../core/settings"
 import { isMobile } from "../core/platform"
 import { applySelectionEdit, editorIsMarkdown, readSelectedText } from "./editorSelection"
+import { guardTiming, holdSelection, keepSelection } from "./selectionGuard"
 const FormModel = require("./formModel")
 
 /** Constants ***************************************************************************************************************************************/
@@ -127,6 +135,8 @@ interface Created {
     inThisNote: string | null
     link: string
     openLater: boolean
+    // The trigger route's tags, written once the answer has gone (writeTriggerTags); empty on every other route, which writes them in createNote.
+    laterTags: string[]
 }
 
 // The In this note row of one open: the buttons, their labels, the starting choice, the route's default (what a value the buttons do not offer
@@ -221,7 +231,21 @@ export async function openTriggerForm(trigger: string): Promise<TriggerAnswer> {
         triggerOpenPending = created.id
         answer.open = created.id
     }
+    if (created.laterTags.length) void writeTriggerTags(created.id, created.laterTags, !created.openLater)
     return answer
+}
+
+/** writeTriggerTags ********************************************************************************************************************************
+ * The trigger route's tags, after the answer has gone: GUARD_TIMING.triggerEditMs for the content script to make its edit in the note the trigger  *
+ * was typed in, then the tags, holding the selection unless the note is being opened. Never throws (it runs after the message is answered).        *
+ ***************************************************************************************************************************************************/
+async function writeTriggerTags(noteId: string, titles: string[], hold: boolean): Promise<void> {
+    try {
+        await new Promise<void>(resolve => setTimeout(resolve, guardTiming().triggerEditMs))
+        await writeTags(noteId, titles, hold)
+    } catch (error) {
+        console.warn("Jot: could not add the tags to the new note", error)
+    }
 }
 
 /** openTriggerNote *********************************************************************************************************************************
@@ -347,14 +371,14 @@ async function selectedFolder(): Promise<any> {
 }
 
 /** createNote **************************************************************************************************************************************
- * Executes a 'create' plan: POST notes with the payload formModel built, the tags, then the In this note choice, and last the open when the plan    *
- * asks for one - last, because opening switches the editor to the new note and the edit must reach the note the form was opened from. The selection *
- * route makes its edit here (the link to the new note under its final title) and remembers the choice. The trigger route only remembers it: its edit *
- * is the content script's, made from the answer, so on Create and open the open waits for the content script too (openLater).                       *
+ * Executes a 'create' plan: POST notes with the payload formModel built, then the In this note choice, then the tags, and last the open when the  *
+ * plan asks for one. The selection route makes its edit first (the link to the new note under its final title), while the editor surely holds the *
+ * note the form was opened from: the tags can make Joplin select another note (the selection guard gives it back, but an edit made in between would *
+ * land in the wrong note), and opening switches the editor for good. The trigger route only remembers the choice: its edit is the content script's,  *
+ * made from the answer, so its tags (laterTags) and, on Create and open, the open wait for the content script too (writeTriggerTags, openLater).     *
  ***************************************************************************************************************************************************/
 async function createNote(plan: any, row: InThisNote): Promise<Created> {
     const note = await joplin.data.post(["notes"], null, plan.note)
-    if (plan.tags.length) await attachTags(note.id, plan.tags)
     const link: string = FormModel.noteLink(plan.note.title, note.id)
     if (plan.inThisNote && row.selection !== null){
         await applySelectionEdit(FormModel.selectionEdit(plan.inThisNote, row.selection, link))
@@ -362,8 +386,20 @@ async function createNote(plan: any, row: InThisNote): Promise<Created> {
     }
     if (plan.inThisNote && row.trigger !== null) await setLastTriggerAction(plan.inThisNote)
     const openLater = !!plan.open && row.trigger !== null
+    const laterTags: string[] = row.trigger !== null ? plan.tags : []
+    if (plan.tags.length && row.trigger === null) await writeTags(note.id, plan.tags, !plan.open)
     if (plan.open && !openLater) await openCreatedNote(note.id)
-    return { id: note.id, opened: !!plan.open, inThisNote: plan.inThisNote || null, link, openLater }
+    return { id: note.id, opened: !!plan.open, inThisNote: plan.inThisNote || null, link, openLater, laterTags }
+}
+
+/** writeTags ***************************************************************************************************************************************
+ * attachTags, bracketed by the selection guard when `hold` (the note is not about to be opened): writing a tag can make Joplin select another note. *
+ ***************************************************************************************************************************************************/
+async function writeTags(noteId: string, titles: string[], hold: boolean): Promise<number> {
+    const held = hold ? await holdSelection() : null
+    const attached = await attachTags(noteId, titles)
+    await keepSelection(held)
+    return attached
 }
 
 /** attachTags **************************************************************************************************************************************
@@ -507,13 +543,18 @@ async function readNoteToEdit(noteId: string): Promise<{ note: any, tags: any[] 
 /** saveEdit ****************************************************************************************************************************************
  * Executes a 'save' plan: the one PUT notes/:id when a note field changed, then the tag diff - attached as on Create (attachTags: reused by        *
  * tagKey, created when missing), detached with DELETE tags/:id/notes/:noteId. A PUT that throws rejects the command, before any tag call; once it  *
- * is done, no tag call throws. "tags" is reported as changed only when a tag call went through.                                                    *
+ * is done, no tag call throws. "tags" is reported as changed only when a tag call went through. A Save that moves the note to another notebook or   *
+ * changes its tags is bracketed by the selection guard.                                                                                           *
  ***************************************************************************************************************************************************/
 async function saveEdit(noteId: string, plan: any): Promise<EditOutcome> {
+    // A tag change, or a note moved to another notebook, can make Joplin select another note (selectionGuard.ts): held around the whole Save.
+    const movesSelection = !!(plan.put && "parent_id" in plan.put) || plan.attach.length > 0 || plan.detach.length > 0
+    const held = movesSelection ? await holdSelection() : null
     if (plan.put) await joplin.data.put(["notes", noteId], null, plan.put)
     let tagCalls = 0
     if (plan.attach.length) tagCalls += await attachTags(noteId, plan.attach)
     if (plan.detach.length) tagCalls += await detachTags(noteId, plan.detach)
+    await keepSelection(held)
     const changed: string[] = plan.changed.filter((field: string) => field !== "tags" || tagCalls > 0)
     return { id: noteId, changed }
 }

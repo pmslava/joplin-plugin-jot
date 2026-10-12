@@ -65,6 +65,10 @@ async function check(name, fn) {
 //   notes                        what GET notes/:id answers, by id (a copy; null answers null); an id not listed rejects, as Joplin's not-found does
 //   noteTags                     what GET notes/:id/tags pages through, by note id (none: no tags); noteTagsGetThrows makes that read reject
 //   putThrows, deleteThrows      (path, body) => boolean / (path) => boolean: a data PUT / DELETE it answers true for rejects (recorded first)
+//   selectedNoteIds              what joplin.workspace.selectedNoteIds() answers: an array, or (readIndex, state) => array, so a check can make
+//                                Joplin's selection jump after a write; none: [] (nothing selected, so the selection guard holds nothing).
+//                                Each read is counted in state.selectionReads (not in workspaceCalls, which pins the notebook default's reads).
+// The selection guard's clock is shortened for the whole harness (globalThis.__jotGuardTiming, set below).
 // The content script's registration lands in state.contentScripts and its message handler in
 // state.contentScriptHandlers, by content script id.
 // Besides the per-kind records, `timeline` lists the plugin's writes and commands in the order they were made
@@ -77,7 +81,7 @@ function makeJoplin(options) {
         sections: [], settingSpecs: {}, settingWrites: [], globalReads: [],
         dialogCreates: [], dialogScripts: [], dialogButtons: [], dialogHtml: [], dialogOpens: 0,
         dataGets: [], dataPosts: [], dataPuts: [], dataDeletes: [], executes: [], workspaceCalls: [], timeline: [],
-        contentScripts: [], contentScriptHandlers: {},
+        contentScripts: [], contentScriptHandlers: {}, selectionReads: 0,
     }
     const written = {}
     const globals = { 'editor.codeView': true, ...(options.globalSettings || {}) }
@@ -130,6 +134,11 @@ function makeJoplin(options) {
         workspace: {
             selectedNote: async () => { state.workspaceCalls.push('selectedNote'); return options.selectedNote === undefined ? null : options.selectedNote },
             selectedFolder: async () => { state.workspaceCalls.push('selectedFolder'); return options.selectedFolder === undefined ? null : options.selectedFolder },
+            selectedNoteIds: async () => {
+                const read = state.selectionReads++
+                const ids = typeof options.selectedNoteIds === 'function' ? options.selectedNoteIds(read, state) : options.selectedNoteIds
+                return Array.isArray(ids) ? ids.slice() : []
+            },
         },
         data: {
             get: async (pathParts, query) => {
@@ -223,6 +232,9 @@ async function withWarnings(state, fn) {
         console.warn = realWarn
     }
 }
+
+// The selection guard's clock (src/form/selectionGuard.ts, GUARD_TIMING), shortened so a guarded write costs milliseconds here.
+globalThis.__jotGuardTiming = { pollMs: 1, watchMs: 40, settleMs: 2, viewWaitMs: 40, viewChecks: 3, viewCheckMs: 1, maxRestores: 2, triggerEditMs: 2 }
 
 async function runBundle(options) {
     const { joplin, state } = makeJoplin(options)
@@ -402,6 +414,9 @@ async function mountTrigger(doc = '', config) {
     const view = {
         composing: false,
         state: null,
+        scrollDOM: { scrollTop: 0 },
+        hasFocus: false,
+        focus() { this.hasFocus = true },
         dispatch(...specs) { this.apply([this.state.update(...specs)]) },
         apply(transactions) {
             const startState = this.state
@@ -413,8 +428,11 @@ async function mountTrigger(doc = '', config) {
     const warnings = []
     const realWarn = console.warn
     console.warn = (...args) => { warnings.push(args.map(String).join(' ')) }
+    const commands = {}
     try {
-        loadContentScript()(context).plugin({ cm6: view, editor: view, addExtension: (extension) => extensions.push(extension) })
+        loadContentScript()(context).plugin({
+            cm6: view, editor: view, addExtension: (extension) => extensions.push(extension), registerCommand: (name, callback) => { commands[name] = callback },
+        })
     } finally {
         console.warn = realWarn
     }
@@ -434,7 +452,52 @@ async function mountTrigger(doc = '', config) {
         console.warn = (...args) => { warnings.push(args.map(String).join(' ')) }
         try { return await fn() } finally { console.warn = realWarn }
     }
-    return { view, extensions, posts, answerTrigger, waiting, type, text, triggers, configs, warnings, quietly }
+    return { view, extensions, posts, answerTrigger, waiting, type, text, triggers, configs, warnings, quietly, commands }
+}
+
+// ------------------------------------------------------------------------------------------ the selection guard
+// A Markdown editor as the guard sees it through editor.execCommand: jot.getView answers its view, jot.setView sets it (refusing another note's
+// view, as the content script does), and openNote loads a note at its top. `jumpTo` is the note Joplin's refresh selects after the tag write: the
+// selection reads ['nRead'] until the first tag call, then [jumpTo] (and the editor holds it) until Jot opens nRead again.
+const HELD_VIEW = { noteId: 'nRead', scrollTop: 840, anchor: 1200, head: 1210, docLength: 3000, focused: true }
+
+function guardedEditor(options = {}) {
+    const jumpTo = options.jumpTo === undefined ? 'note0001' : options.jumpTo
+    let editor = { ...HELD_VIEW }
+    let jumped = false
+    let reopened = false
+    const setViews = []
+    const opens = []
+    const fixture = {
+        selectedNoteIds: (read, state) => {
+            if (options.selection) return options.selection(read, state)
+            const tagWritten = state.timeline.some(line => /^(POST tags|DELETE tags|PUT notes)/.test(line))
+            if (!tagWritten || reopened || !jumpTo) return ['nRead']
+            if (!jumped) { jumped = true; editor = { noteId: jumpTo, scrollTop: 0, anchor: 0, head: 0, docLength: 40, focused: false } }
+            return [jumpTo]
+        },
+        executeResults: {
+            'editor.execCommand': (call) => {
+                if (options.richText) return undefined
+                if (call.name === 'jot.getView') return { ...editor }
+                if (call.name === 'jot.setView') {
+                    const wanted = call.args[0]
+                    setViews.push(wanted)
+                    if (wanted.noteId && wanted.noteId !== editor.noteId) return null
+                    editor = { ...editor, scrollTop: wanted.scrollTop, anchor: wanted.anchor, head: wanted.head, focused: wanted.focused }
+                    return { ...editor }
+                }
+                return undefined
+            },
+            openNote: (noteId) => {
+                opens.push(noteId)
+                if (options.openThrows) throw new Error('No such note')
+                if (noteId === 'nRead') reopened = true
+                editor = { noteId, scrollTop: 0, anchor: 0, head: 0, docLength: noteId === 'nRead' ? 3000 : 40, focused: false }
+            },
+        },
+    }
+    return { fixture, setViews, opens, view: () => ({ ...editor }) }
 }
 
 // ------------------------------------------------------------------------------------------ the checks
@@ -918,15 +981,15 @@ async function main() {
             'an "after" the Rich Text form never offered is applied as the route\'s default, replace (insertText, never the HTML replaceSelection)')
     })
 
-    await check('selection route, replace: POST notes, the tag calls, then insertText with [Title](:/id) under the final title; nothing opened; the choice remembered', async () => {
+    await check('selection route, replace: POST notes, then insertText with [Title](:/id) under the final title, then the tag calls; nothing opened; the choice remembered', async () => {
         const { state, outcome } = await openSelectionWith('Call the bank\nabout the card', {
             dialogResults: [formResult('ok', { title: ' Call the [bank] ', body: 'about the card', tags: 'work, new one', inThisNote: 'replace' })],
         })
         assert.deepStrictEqual(outcome, { id: outcome.id, opened: false })
         assert.deepStrictEqual(state.timeline, [
-            'execute selectedText', 'POST notes', 'POST tags/tWork/notes', 'POST tags', 'POST tags/tag0002/notes',
-            'execute insertText', 'setValue lastSelectionAction=replace',
-        ])
+            'execute selectedText', 'POST notes', 'execute insertText', 'setValue lastSelectionAction=replace',
+            'POST tags/tWork/notes', 'POST tags', 'POST tags/tag0002/notes',
+        ], 'the edit before the tags: a tag write can make Joplin select another note')
         assert.deepStrictEqual(state.executes[1], { name: 'insertText', args: [`[Call the \\[bank\\]](:/${outcome.id})`] }, 'the trimmed title, brackets escaped')
         assert.deepStrictEqual(state.warnings, [])
         const rich = await openSelectionWith('Call the bank', {
@@ -942,9 +1005,9 @@ async function main() {
             dialogResults: [formResult('openAfter', { title: 'Rent', body: 'by Friday', tags: 'home', inThisNote: 'after' })],
         })
         assert.deepStrictEqual(several.state.timeline, [
-            'execute selectedText', 'POST notes', 'POST tags', 'POST tags/tag0002/notes',
-            'execute replaceSelection', 'setValue lastSelectionAction=after', 'execute openNote',
-        ], 'Create and open: the edit reaches the note the selection came from before the editor switches')
+            'execute selectedText', 'POST notes', 'execute replaceSelection', 'setValue lastSelectionAction=after',
+            'POST tags', 'POST tags/tag0002/notes', 'execute openNote',
+        ], 'Create and open: the edit reaches the note the selection came from before the tags and before the editor switches')
         assert.deepStrictEqual(several.state.executes[1].args, [`Pay rent\nby Friday\n[Rent](:/${several.outcome.id})`])
         assert.deepStrictEqual(several.state.executes[2], { name: 'openNote', args: [several.outcome.id] })
         assert.deepStrictEqual(several.outcome, { id: several.outcome.id, opened: true })
@@ -1045,8 +1108,8 @@ async function main() {
         })
         assert.deepStrictEqual(refused.outcome, { id: refused.outcome.id, opened: true }, 'the command resolves, it does not throw')
         assert.deepStrictEqual(refused.state.timeline, [
-            'execute selectedText', 'POST notes', 'POST tags', 'POST tags', 'POST tags/tag0002/notes', 'POST tags/tWork/notes',
-            'execute insertText', 'setValue lastSelectionAction=replace', 'execute openNote',
+            'execute selectedText', 'POST notes', 'execute insertText', 'setValue lastSelectionAction=replace',
+            'POST tags', 'POST tags', 'POST tags/tag0002/notes', 'POST tags/tWork/notes', 'execute openNote',
         ])
         assert.deepStrictEqual(refused.state.warnings.filter(line => line.startsWith('Jot: could not add the tag "first"')).length, 1, refused.state.warnings.join(' | '))
         // POST tags/:id/notes refused: the same.
@@ -1131,7 +1194,9 @@ async function main() {
     await check('trigger handler: Create with remove answers { action: \'remove\' }; with link { action: \'link\', link: [Title](:/id) } as the selection route builds it; the choice is remembered', async () => {
         const remove = await fireTriggerWith({ dialogResults: [formResult('ok', { title: 'Call the bank', tags: 'work', inThisNote: 'remove' })] })
         assert.deepStrictEqual(remove.answer, { action: 'remove' })
-        assert.deepStrictEqual(remove.state.timeline, ['POST notes', 'POST tags/tWork/notes', 'setValue lastTriggerAction=remove'], 'nothing opened, no editor command')
+        assert.deepStrictEqual(remove.state.timeline, ['POST notes', 'setValue lastTriggerAction=remove'], 'answered before the tags: the content script makes its edit first')
+        await tick(30)
+        assert.deepStrictEqual(remove.state.timeline, ['POST notes', 'setValue lastTriggerAction=remove', 'POST tags/tWork/notes'], 'then the tags; nothing opened, no editor command')
         assert.deepStrictEqual(notePosts(remove.state)[0].body, { parent_id: 'fProj', is_todo: 1, title: 'Call the bank', body: '', todo_due: 0 })
         const link = await fireTriggerWith({ dialogResults: [formResult('ok', { title: ' Call the [bank] ', inThisNote: 'link' })] })
         assert.deepStrictEqual(link.answer, { action: 'link', link: '[Call the \\[bank\\]](:/note0001)' }, 'the trimmed title, brackets escaped')
@@ -2212,6 +2277,118 @@ async function main() {
         assert.deepStrictEqual(late.triggers().map(post => [post.from, post.to]), [[3, 5]])
     })
 
+    // ---------------------------------------------------------------- the selection guard
+    await check('selection guard: a Create whose tag makes Joplin select the new note opens the note being read again, with its scroll, caret and focus', async () => {
+        const editor = guardedEditor()
+        const { state, outcome } = await openFormWith({ ...editor.fixture, dialogResults: [formResult('ok', { title: 'Call the bank', tags: 'work' })] })
+        assert.deepStrictEqual(outcome, { id: 'note0001', opened: false }, 'resolves as a plain Create')
+        assert.deepStrictEqual(editor.opens, ['nRead'], 'the note being read, opened once; the new note never by Jot')
+        assert.deepStrictEqual(editor.setViews[0], HELD_VIEW, 'the view held before the tag write')
+        assert.deepStrictEqual(editor.view(), HELD_VIEW, 'scroll, caret and focus as they were')
+        const order = state.timeline.filter(line => line !== 'execute editor.execCommand')
+        assert.deepStrictEqual(order, ['execute selectedText', 'POST notes', 'POST tags/tWork/notes', 'execute openNote'])
+        assert.ok(state.timeline.indexOf('execute editor.execCommand') < state.timeline.indexOf('POST tags/tWork/notes'), 'the view is read before the tag write')
+        assert.deepStrictEqual(state.warnings, [])
+    })
+
+    await check('selection guard: nothing moved (a notebook view), nothing reopened; no tags, Create and open, a multi-selection, mobile: nothing held at all', async () => {
+        const still = guardedEditor({ jumpTo: null })
+        const kept = await openFormWith({ ...still.fixture, dialogResults: [formResult('ok', { title: 'Call the bank', tags: 'work' })] })
+        assert.deepStrictEqual(still.opens, [], 'no openNote')
+        assert.deepStrictEqual(still.setViews, [])
+        assert.ok(kept.state.selectionReads > 2, 'the selection was watched')
+        for (const [label, options] of [
+            ['no tags', { dialogResults: [formResult('ok', { title: 'Plain' })] }],
+            ['Create and open', { dialogResults: [formResult('openAfter', { title: 'Open it', tags: 'work' })] }],
+            ['mobile', { versionInfo: MOBILE, dialogResults: [formResult('ok', { title: 'Phone', tags: 'work' })] }],
+        ]) {
+            const editor = guardedEditor()
+            const run = await openFormWith({ ...editor.fixture, ...options })
+            assert.strictEqual(run.state.selectionReads, 0, `${label}: nothing held`)
+            assert.deepStrictEqual(editor.opens.filter(id => id === 'nRead'), [], `${label}: the note being read is not reopened`)
+        }
+        const several = guardedEditor({ selection: () => ['nRead', 'nOther'] })
+        const multi = await openFormWith({ ...several.fixture, dialogResults: [formResult('ok', { title: 'Two', tags: 'work' })] })
+        assert.strictEqual(multi.state.selectionReads, 1, 'a multi-selection is read once and not held')
+        assert.ok(!multi.state.executes.some(call => call.name === 'editor.execCommand'), 'no view read for it')
+    })
+
+    await check('selection guard: the Rich Text editor (no view) gets its note back without a view; a multi-selection appearing is the user\'s; a failed open is a warning and the command still resolves', async () => {
+        const rich = guardedEditor({ richText: true })
+        const plain = await openFormWith({ ...rich.fixture, dialogResults: [formResult('ok', { title: 'Rich', tags: 'work' })] })
+        assert.deepStrictEqual(rich.opens, ['nRead'])
+        assert.deepStrictEqual(rich.setViews, [], 'no view to put back')
+        assert.deepStrictEqual(plain.outcome.opened, false)
+        const user = guardedEditor({ selection: (read, state) => state.timeline.includes('POST tags/tWork/notes') ? ['nRead', 'nPicked'] : ['nRead'] })
+        await openFormWith({ ...user.fixture, dialogResults: [formResult('ok', { title: 'Mine', tags: 'work' })] })
+        assert.deepStrictEqual(user.opens, [], 'a multi-selection is not undone')
+        const refused = guardedEditor({ openThrows: true })
+        const failed = await openFormWith({ ...refused.fixture, dialogResults: [formResult('ok', { title: 'Gone', tags: 'work' })] })
+        assert.deepStrictEqual(failed.outcome, { id: 'note0001', opened: false })
+        assert.deepStrictEqual(refused.opens, ['nRead'], 'tried once, not again')
+        assert.ok(failed.state.warnings.some(line => line.startsWith('Jot: Joplin moved off the note you were reading and it could not be opened again')), failed.state.warnings.join(' | '))
+    })
+
+    await check('selection guard: on the selection route the link is written before the tags, so a jump cannot carry it into the new note; the note is then given back', async () => {
+        const editor = guardedEditor()
+        const { state } = await openSelectionWith('Call the bank', {
+            ...editor.fixture,
+            executeResults: { ...editor.fixture.executeResults },
+            dialogResults: [formResult('ok', { title: 'Call the bank', tags: 'work', inThisNote: 'replace' })],
+        })
+        const order = state.timeline.filter(line => line !== 'execute editor.execCommand')
+        assert.deepStrictEqual(order, ['execute selectedText', 'POST notes', 'execute insertText', 'setValue lastSelectionAction=replace', 'POST tags/tWork/notes', 'execute openNote'])
+        assert.deepStrictEqual(editor.opens, ['nRead'])
+    })
+
+    await check('selection guard: the trigger route answers first and writes its tags after, held, and a jump they cause is undone', async () => {
+        const editor = guardedEditor()
+        const { state, answer } = await fireTriggerWith({ ...editor.fixture, dialogResults: [formResult('ok', { title: 'Order tyres', tags: 'work', inThisNote: 'link' })] })
+        assert.deepStrictEqual(answer, { action: 'link', link: '[Order tyres](:/note0001)' })
+        assert.ok(!state.timeline.includes('POST tags/tWork/notes'), 'no tag yet when the answer goes')
+        await tick(60)
+        const order = state.timeline.filter(line => line !== 'execute editor.execCommand')
+        assert.deepStrictEqual(order, ['POST notes', 'setValue lastTriggerAction=link', 'POST tags/tWork/notes', 'execute openNote'])
+        assert.deepStrictEqual(editor.opens, ['nRead'])
+        assert.deepStrictEqual(editor.view(), HELD_VIEW)
+        const opening = guardedEditor()
+        const open = await fireTriggerWith({ ...opening.fixture, dialogResults: [formResult('openAfter', { title: 'Open me', tags: 'work', inThisNote: 'remove' })] })
+        await tick(60)
+        assert.strictEqual(open.state.selectionReads, 0, 'Create and open on the trigger route: the tags are not held')
+        assert.ok(open.state.timeline.includes('POST tags/tWork/notes'), 'the tags are written all the same')
+    })
+
+    await check('selection guard: edit mode holds the selection when Save moves the note to another notebook or changes its tags, not for a title alone', async () => {
+        for (const [label, fields] of [['notebook', { notebookId: 'fHome' }], ['tags', { tags: 'urgent' }]]) {
+            const editor = guardedEditor({ jumpTo: 'nNeighbour' })
+            const { outcome, state } = await editWith({ ...editor.fixture, dialogResults: [editResult('ok', fields)] })
+            assert.ok(outcome && outcome.changed.length, `${label}: saved`)
+            assert.deepStrictEqual(editor.opens, ['nRead'], `${label}: the note being read is given back`)
+            assert.deepStrictEqual(editor.view(), HELD_VIEW, `${label}: with its view`)
+            assert.ok(state.selectionReads > 1, label)
+        }
+        const title = guardedEditor({ jumpTo: 'nNeighbour' })
+        const renamed = await editWith({ ...title.fixture, dialogResults: [editResult('ok', { title: 'Call the bank today' })] })
+        assert.deepStrictEqual(renamed.outcome.changed, ['title'])
+        assert.strictEqual(renamed.state.selectionReads, 0, 'a title alone moves no selection: nothing held, no wait')
+    })
+
+    await check('content script: jot.getView answers the note, scroll, caret and focus; jot.setView puts them back, clamped, and refuses another note\'s view', async () => {
+        const editor = await mountTrigger('0123456789')
+        assert.deepStrictEqual(Object.keys(editor.commands).sort(), ['jot.getView', 'jot.setView'])
+        assert.deepStrictEqual(editor.commands['jot.getView'](), { noteId: null, scrollTop: 0, anchor: 10, head: 10, docLength: 10, focused: false }, 'no note id until Joplin switches a note')
+        const noteId = CMStateEffect.define()
+        editor.view.dispatch({ effects: noteId.of('0123456789abcdef0123456789abcdef') })
+        assert.strictEqual(editor.commands['jot.getView']().noteId, '0123456789abcdef0123456789abcdef')
+        const put = editor.commands['jot.setView']({ noteId: '0123456789abcdef0123456789abcdef', scrollTop: 420, anchor: 2, head: 99, focused: true })
+        assert.deepStrictEqual(put, { noteId: '0123456789abcdef0123456789abcdef', scrollTop: 420, anchor: 2, head: 10, docLength: 10, focused: true }, 'the head clamped to the document')
+        assert.deepStrictEqual([editor.view.scrollDOM.scrollTop, editor.view.hasFocus], [420, true])
+        assert.strictEqual(editor.commands['jot.setView']({ noteId: 'ffffffffffffffffffffffffffffffff', scrollTop: 1, anchor: 0, head: 0 }), null, 'another note\'s view is refused')
+        assert.strictEqual(editor.view.scrollDOM.scrollTop, 420, 'and changes nothing')
+        assert.strictEqual(editor.commands['jot.setView']('nonsense'), null)
+        assert.ok(read('src/contentScript.ts').includes("editorControl.registerCommand('jot.getView', () => watcher.viewState(view))"))
+    })
+
     await check('sandbox proxy: the audit below covers edit mode\'s calls - the note reads, PUT notes/:id, DELETE tags/:id/notes/:noteId, the note list\'s menu item - each a member read and called at once', () => {
         const host = read('src/form/form.ts')
         for (const call of ['joplin.data.get(["notes", noteId], { fields: EDIT_NOTE_FIELDS })', 'joplin.data.put(["notes", noteId], null, plan.put)',
@@ -2237,7 +2414,7 @@ async function main() {
         walk(path.join(ROOT, 'src'))
         assert.ok(files.length >= 3, 'the audit must actually have found the source tree')
         for (const file of ['index.ts', 'core/settings.ts', 'form/form.ts', 'form/formHtml.ts', 'form/formModel.js', 'form/formWebview.js', 'form/editorSelection.ts',
-            'trigger.ts', 'contentScript.ts', 'form/triggerRule.js']) {
+            'trigger.ts', 'contentScript.ts', 'form/triggerRule.js', 'form/selectionGuard.ts']) {
             assert.ok(files.includes(path.join(ROOT, 'src', file)), `the audit covers src/${file}`)
         }
 
