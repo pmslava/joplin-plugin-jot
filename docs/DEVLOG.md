@@ -16,7 +16,7 @@ Process: the first publish of a new npm package cannot go through trusted publis
 
 No code change. The README gained five screenshots taken in the e2e app (`e2e/showcase.spec.ts`, `SHOWCASE=1`) and the package's repository URL took npm's normalised form, which the npm page had not seen. The release exists to validate the trusted-publisher entry on npmjs.com, which npm now keeps only if one publish passes through it within two days of its creation; from this release on, a GitHub release publishes by itself.
 
-## 2026-10-12 — unreleased: the selection guard
+## 2026-10-12 — v0.1.2: the selection guard
 
 Slava reported that Jot sometimes put him in the new note after a plain Create. The cause is Joplin's, read in the 3.6.14 and 3.7.21 bundles and reproduced in the e2e app: every tag change (a tag created or attached dispatches TAG_UPDATE_ONE, a tag removed NOTE_TAG_REMOVE) makes `BaseApplication.refreshNotes` reload the note list and select a note again, the last one selected in that list, or its first note when the list keeps none. A smart filter such as All notes keeps none, so after a Jot create with a tag the refresh selects the new note, which sorts first. Separately, moving a listed note to another notebook makes the reducer select the note that took its place. Without tags, or in a notebook view, nothing moves, which is why it happened only sometimes.
 
