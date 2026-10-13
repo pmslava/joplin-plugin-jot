@@ -715,14 +715,24 @@ function scrollAlarmColumn(column, index, total){
 function applyJotPlatformClass(){
     if (!jotById('jotPlatform')) return
     var wrapper = jotById('joplin-plugin-content')
-    if (wrapper) wrapper.classList.add('jot-mobile')
+    if (!wrapper) return
+    wrapper.classList.add('jot-mobile')
+    wrapper.style.width = jotMobileWidth() + 'px'
 }
 
-/** focusJotTitle **********************************************************************************************************************************
- * The Title has the focus on open, so typing goes there, Enter creates and Shift+Tab reaches the Type toggle. autofocus in the markup only counts     *
- * while a document is parsing, and this markup arrives later, so the focus is given here - and once more when the dialog's frame itself receives the *
- * focus (Joplin focuses it when the dialog is ready), in case that came after.                                                                       *
+/** jotMobileWidth **********************************************************************************************************************************
+ * The form's width on mobile, from the SCREEN, never from the viewport. Joplin mobile sizes a fit-to-content dialog to its content's measured width  *
+ * (PluginDialogWebView.tsx, re-measured every 500 ms by useDialogSize, capped at 97% of the window), and the webview inside the dialog is the        *
+ * dialog's width - so a width taken from the viewport (it was calc(100vw - 16px)) made the content 16px narrower than the dialog, the dialog then   *
+ * 16px narrower, and so on at every measurement: the form shrank on the phone until it was a sliver. The screen's width does not change with the     *
+ * dialog, so this is measured once per layout and holds still: 94% of it (inside Joplin's 97% cap), at most the desktop's 440px, at least 240px.    *
  ***************************************************************************************************************************************************/
+function jotMobileWidth(){
+    var screenWidth = window.screen && Number(window.screen.width)
+    if (!screenWidth || !isFinite(screenWidth)) screenWidth = 360
+    return Math.max(240, Math.min(440, Math.floor(screenWidth * 0.94)))
+}
+
 /** Enter with no title ****************************************************************************************************************************
  * Joplin submits the form on Enter in any text input (its own keydown listener on the dialog's document, in the bubble phase). With the Title empty  *
  * that would close the form having created nothing (in edit mode, save a note called Untitled), so that Enter is kept from Joplin and the Title gets  *
@@ -765,6 +775,11 @@ function onJotWindowKeyDown(event){
     else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
 }
 
+/** focusJotTitle **********************************************************************************************************************************
+ * The Title has the focus on open, so typing goes there, Enter creates and Shift+Tab reaches the Type toggle. autofocus in the markup only counts     *
+ * while a document is parsing, and this markup arrives later, so the focus is given here - and once more when the dialog's frame itself receives the *
+ * focus (Joplin focuses it when the dialog is ready), in case that came after.                                                                       *
+ ***************************************************************************************************************************************************/
 function focusJotTitle(){
     var title = jotById('jotTitle')
     if (!title) return

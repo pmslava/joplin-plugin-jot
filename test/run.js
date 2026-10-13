@@ -2096,6 +2096,26 @@ async function main() {
         assert.ok(rule.includes("form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))"), 'Joplin\'s document submit listener answers either way')
     })
 
+    await check('mobile width: from the screen, never the viewport (100vw is the dialog\'s own width on mobile, and Joplin sizes the dialog to the content, so it shrank at every measurement); 94% of the screen, 240 to 440px', () => {
+        const vm = require('vm')
+        const css = read('src/form/form.css').replace(/\/\*[\s\S]*?\*\//g, '')
+        assert.ok(!/\d\s*v(w|h|min|max)\b/.test(css), 'no viewport unit anywhere in the form\'s CSS')
+        const glue = read('src/form/formWebview.js')
+        assert.ok(!/innerWidth|clientWidth\s*\)|100vw/.test(glue.slice(glue.indexOf('function jotMobileWidth'), glue.indexOf('function jotMobileWidth') + 900)))
+        const widthFor = (screen) => {
+            const sandbox = { document: { readyState: 'complete', documentElement: {}, getElementById: () => null, querySelector: () => null },
+                MutationObserver: class { observe() {} }, setTimeout: () => 0, screen }
+            sandbox.window = sandbox
+            sandbox.addEventListener = () => {}
+            vm.createContext(sandbox)
+            vm.runInContext(read('src/form/formWebview.js'), sandbox)
+            return sandbox.jotMobileWidth()
+        }
+        assert.deepStrictEqual([{ width: 412 }, { width: 360 }, { width: 1200 }, { width: 200 }, undefined, { width: NaN }].map(widthFor), [387, 338, 440, 240, 338, 338])
+        const apply = glue.slice(glue.indexOf('function applyJotPlatformClass'), glue.indexOf('/** jotMobileWidth'))
+        assert.ok(apply.includes("wrapper.style.width = jotMobileWidth() + 'px'"), 'the mobile switch sets it')
+    })
+
     await check('dialog glue: every selector (Type, In this note, Back link, Open) is one generic radiogroup - click, arrow keys wrapping through moveHighlight, the hidden input written; In this note falls back to the route\'s default, else the first button drawn; one line, never stacked', () => {
         const glue = read('src/form/formWebview.js')
         assert.ok(glue.includes("var groups = form.querySelectorAll('.jot-seg')") && glue.includes("groups[group].addEventListener('click', onJotSegClick)")

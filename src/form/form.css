@@ -16,9 +16,11 @@
     width: 440px;
 }
 /* The narrow layout is gated on the jot-mobile class, which formWebview.js puts on the wrapper only when the markup
- * carries the #jotPlatform marker (mobile), never on a viewport query (see above). */
+ * carries the #jotPlatform marker (mobile), never on a viewport query (see above). Its width is set there too, in pixels
+ * from the screen (jotMobileWidth): never from the viewport - 100vw is the dialog's own width on mobile, and Joplin sizes
+ * the dialog to the content, so a width taken from it shrinks the dialog at every measurement. */
 #joplin-plugin-content.jot-mobile {
-    width: calc(100vw - 16px);
+    max-width: 440px;
 }
 
 /* Anything with a display rule of its own still hides when the script sets [hidden]. */
