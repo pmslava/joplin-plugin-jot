@@ -37,7 +37,13 @@ Type, Title, Text, Notebook, Tags, then the choices, and Due last. The title is 
 - **Back link**: Add puts a line linking to the note you are in at the top of the new note, then an empty line, then the text (or at the bottom, by setting). Hover Add to see the line. It starts on the setting, Don't add unless you change it.
 - **Open**: No (stay where you are, the default), In editor, or New window. It starts on the setting.
 
-**Notebook** starts on the notebook of the note you are in, or on the notebook the setting names, such as an inbox. **Tags** start with the tags of the note you are in, followed by a comma and a space, so you can clear what does not fit or type the next tag straight away. Both filter a list as you type, and Enter picks the highlighted row.
+Jot tells two kinds of note apart. A **quick note** is one you start with nothing highlighted, from the shortcut, the menu or the toolbar button: a reminder to deal with later. A **note from text in a note** is one you start from highlighted text or by typing `++`: it belongs with the note it came from. By default:
+
+- **Notebook** starts on the notebook setting for a quick note, such as an inbox, and on the notebook of the note you are in for a note from text.
+- **Tags** stay empty for a quick note. For a note from text they start with the tags of the note you are in, followed by a comma and a space, so you can clear what does not fit or type the next tag straight away.
+- **Back link** starts on Don't add, for every note, until you choose otherwise in Settings.
+
+Each of these is a setting, so a quick note can be just the shortcut, a title and Enter, and a note from text can come out ready, with no clicks. Notebook and Tags filter a list as you type, and Enter picks the highlighted row.
 
 **Title** and **Tags** grow with what they hold, up to three lines; past that they scroll, and the scrollbar shows there is more. Tab into either puts the cursor at the end, ready to add to it; a click puts it where you click. Enter in them never starts a new line, and a pasted line break becomes a space.
 
@@ -53,8 +59,9 @@ Settings › Plugins › Jot:
 
 - **What Jot creates**: a to-do or a note.
 - **Notebook**: The current notebook (the one of the note you are in), or any notebook, such as an inbox. Notebooks made later appear in the list once Jot has been used.
-- **Fill in the tags of the note you are in**: on by default.
-- **Add a back link to the note you are in**: off by default; the form's Back link starts here.
+- **Use the Notebook setting for**: Quick notes only (default), so a note from text starts in its note's notebook, or All notes.
+- **Fill in the tags of the note you are in**: Never, For notes from text in a note (default), or Always.
+- **Add a back link to the note you are in**: Never (default), For notes from text in a note, or Always; the form's Back link starts here.
 - **Back link text**: `Parent {note_type}: {note_link}` by default. The placeholders are Copy Note ID's, for the note you are in: `{note_link}`, `{note_title}`, `{note_id}`, `{note_type}` (to-do or note), `{notebook_name}`, `{notebook_path}` (such as `Work/Projects`) and `{notebook_id}`. So `Extracted from: {note_link}` works too.
 - **Back link position**: the first line, above the text (default), or the last line, below it.
 - **Open the new note**: No, In the editor, or In a new window; the form's Open starts here.

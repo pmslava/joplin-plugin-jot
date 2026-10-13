@@ -662,12 +662,13 @@ async function main() {
     })
 
     // ---------------------------------------------------------------- settings and the toolbar gate
-    await check('settings: section Jot with exactly defaultType, defaultNotebook, copyTags, backlink, backlinkTemplate, backlinkPosition, openAfterCreate, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton, all on screen', () => {
+    await check('settings: section Jot with exactly defaultType, defaultNotebook, defaultNotebookFor, tagsFrom, backlinkFor, backlinkTemplate, backlinkPosition, openAfterCreate, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton on screen, and 0.2.0\'s copyTags and backlink hidden', () => {
         assert.deepStrictEqual(desktop.sections.map(section => [section.name, section.spec.label]), [['jot', 'Jot']])
         const specs = desktop.settingSpecs
-        assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'defaultNotebook', 'copyTags', 'backlink', 'backlinkTemplate', 'backlinkPosition', 'openAfterCreate',
-            'selectionAction', 'trigger', 'triggerAction', 'dayStartTime', 'showToolbarButton'], 'every selector has its default on screen (issue 5); nothing hidden')
-        const hidden = []
+        assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'defaultNotebook', 'defaultNotebookFor', 'tagsFrom', 'backlinkFor', 'backlinkTemplate', 'backlinkPosition',
+            'openAfterCreate', 'selectionAction', 'trigger', 'triggerAction', 'dayStartTime', 'showToolbarButton', 'copyTags', 'backlink'],
+            'every selector has its default on screen (issue 5); the 0.2.0 switches hidden, kept for the carry-over (issue 6)')
+        const hidden = ['copyTags', 'backlink']
         for (const key of Object.keys(specs)) {
             assert.strictEqual(specs[key].section, 'jot', `${key} is in the Jot section`)
             assert.strictEqual(specs[key].public, !hidden.includes(key), `${key} is ${hidden.includes(key) ? 'hidden' : 'public'}`)
@@ -692,15 +693,22 @@ async function main() {
             description: 'Where Jot creates a note unless you pick another in the form: the notebook of the note you are in, or always the same notebook, such as an inbox. Notebooks made later appear here once Jot has been used.',
             value: '', type: STRING, isEnum: true, options: { '': 'The current notebook' },
         }, 'the current notebook by default; the startup fixture has no notebooks to list')
-        assert.deepStrictEqual(pick(specs.copyTags), {
+        assert.deepStrictEqual(pick(specs.defaultNotebookFor), {
+            label: 'Use the Notebook setting for',
+            description: 'Quick notes are the ones Jot opens with nothing highlighted: the shortcut, the menu, the toolbar button. With Quick notes only, a note from text in a note (highlighted text or the typed trigger) starts in that note\'s notebook.',
+            value: 'quick', type: STRING, isEnum: true, options: { quick: 'Quick notes only', all: 'All notes' },
+        }, 'issue 6: quick notes only by default (issue 3 asked for the toolbar button and the shortcut)')
+        assert.deepStrictEqual(pick(specs.tagsFrom), {
             label: 'Fill in the tags of the note you are in',
-            description: 'The form\'s Tags start with the tags of the note you are in, when there is one. Change or clear them in the form.',
-            value: true, type: BOOL, isEnum: undefined, options: undefined,
-        }, 'on by default (issue 1)')
-        assert.deepStrictEqual(pick(specs.backlink), {
-            label: 'Add a back link to the note you are in', description: 'Where the form\'s Back link starts. You can switch it in the form.',
-            value: false, type: BOOL, isEnum: undefined, options: undefined,
-        }, 'off by default (issue 2)')
+            description: 'For notes from text in a note: when Jot is opened from highlighted text or by the typed trigger, the form\'s Tags start with the tags of that note. Always: whenever you are in a note. You can change or clear them in the form.',
+            value: 'text', type: STRING, isEnum: true, options: { never: 'Never', text: 'For notes from text in a note', always: 'Always' },
+        }, 'issue 6: for notes from text by default')
+        assert.deepStrictEqual(pick(specs.backlinkFor), {
+            label: 'Add a back link to the note you are in',
+            description: 'Where the form\'s Back link starts: on Add for notes from text in a note (highlighted text or the typed trigger), always, or never. You can switch it in the form.',
+            value: 'never', type: STRING, isEnum: true, options: { never: 'Never', text: 'For notes from text in a note', always: 'Always' },
+        }, 'issue 6: never by default, as 0.2.0\'s switch')
+        assert.deepStrictEqual([specs.copyTags.value, specs.copyTags.type, specs.backlink.value, specs.backlink.type], [true, BOOL, false, BOOL], 'the 0.2.0 switches, at their defaults')
         assert.deepStrictEqual(pick(specs.backlinkTemplate), {
             label: 'Back link text',
             description: 'Placeholders for the note you are in: {note_link} (a Markdown link to it), {note_title}, {note_id}, {note_type} (to-do or note), {notebook_name}, {notebook_path} (such as Work/Projects), {notebook_id}. Empty means the default, Parent {note_type}: {note_link}.',
@@ -1526,7 +1534,7 @@ async function main() {
             const state = await runBundle({ ...FORM_BASE, ...EDIT_BASE })
             const outcome = await withWarnings(state, () => state.commands.find(item => item.name === 'jot.open').execute(args))
             assert.strictEqual(outcome, null, String(JSON.stringify(args)))
-            assert.deepStrictEqual([state.executes, state.dialogCreates, noteReads(state)], [[READ_SELECTION], ['jot.form'], ['notes/nOpen/tags id,title']], String(JSON.stringify(args)))
+            assert.deepStrictEqual([state.executes, state.dialogCreates, noteReads(state)], [[READ_SELECTION], ['jot.form'], []], String(JSON.stringify(args)))
             assert.ok(state.dialogHtml[0].includes('>New to-do</strong>') && !state.dialogHtml[0].includes('jotInThisNoteRow'), JSON.stringify(args))
         }
         const selected = await runBundle({ ...FORM_BASE, executeResults: { selectedText: 'Buy milk\nsemi-skimmed' } })
@@ -1574,7 +1582,7 @@ async function main() {
         assert.strictEqual(await other.commands.find(item => item.name === 'jot.open').execute(EDIT_ARGS), null)
         releaseCreate({ id: 'cancel' })
         assert.strictEqual(await creating, null)
-        assert.deepStrictEqual(noteReads(other), ['notes/nOpen/tags id,title'], 'only the create form\'s read of the current note\'s tags; the refused edit read nothing')
+        assert.deepStrictEqual(noteReads(other), [], 'the refused edit read nothing (and a quick note reads no tags)')
     })
 
     // ---------------------------------------------------------------- the pure model
@@ -2386,51 +2394,85 @@ async function main() {
     const tagsValue = (html) => fieldValue(html, 'tags')
     const segValue = (html, id) => (new RegExp(`<input type="hidden" name="[a-zA-Z]+" id="${id}" value="([^"]*)">`).exec(html) || [])[1]
 
-    await check('issue 1: the Tags start with the tags of the note you are in (setting on by default); off, nothing is read; the caller\'s route and no note read none', async () => {
-        const on = await openFormWith({ selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS, dialogResults: [formResult('ok', { title: 'Idea', tags: 'idea, work' })] })
-        assert.strictEqual(tagsValue(on.state.dialogHtml[0]), 'idea, work, ', 'sorted, comma separated, and a comma and a space after the last, so the next is typed straight on')
-        assert.deepStrictEqual(noteReads(on.state), ['notes/nOpen/tags id,title'])
-        assert.deepStrictEqual(on.state.timeline.filter(line => line.startsWith('POST tags')), ['POST tags/tIdea/notes', 'POST tags/tWork/notes'])
-        const off = await openFormWith({ selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS, settings: { copyTags: false } })
-        assert.deepStrictEqual([tagsValue(off.state.dialogHtml[0]), noteReads(off.state)], ['', []])
-        const none = await openFormWith({ selectedNote: null, noteTags: OPEN_TAGS })
+    await check('issues 1 and 6: the Tags start with the tags of the note you are in for notes from text (highlighted text, the typed trigger) by default, for every note with Always, never with Never; the caller\'s route and no note read none', async () => {
+        const fromText = await openSelectionWith('Idea', { selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS, dialogResults: [formResult('ok', { title: 'Idea', tags: 'idea, work' })] })
+        assert.strictEqual(tagsValue(fromText.state.dialogHtml[0]), 'idea, work, ', 'from highlighted text: sorted, comma separated, a comma and a space after the last')
+        assert.deepStrictEqual(noteReads(fromText.state), ['notes/nOpen/tags id,title'])
+        assert.deepStrictEqual(fromText.state.timeline.filter(line => line.startsWith('POST tags')), ['POST tags/tIdea/notes', 'POST tags/tWork/notes'])
+        const trigger = await fireTriggerWith({ selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS })
+        assert.strictEqual(tagsValue(trigger.state.dialogHtml[0]), 'idea, work, ', 'by the typed trigger too')
+        const quick = await openFormWith({ selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS })
+        assert.deepStrictEqual([tagsValue(quick.state.dialogHtml[0]), noteReads(quick.state)], ['', []], 'a quick note (nothing highlighted) starts with no tags, and reads none')
+        const always = await openFormWith({ selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS, settings: { tagsFrom: 'always' } })
+        assert.strictEqual(tagsValue(always.state.dialogHtml[0]), 'idea, work, ', 'Always: a quick note too')
+        const never = await openSelectionWith('Idea', { selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS, settings: { tagsFrom: 'never' } })
+        assert.deepStrictEqual([tagsValue(never.state.dialogHtml[0]), noteReads(never.state)], ['', []], 'Never: not even from text')
+        const none = await openSelectionWith('Idea', { selectedNote: null, noteTags: OPEN_TAGS })
         assert.deepStrictEqual([tagsValue(none.state.dialogHtml[0]), noteReads(none.state)], ['', []], 'no note open: nothing to copy')
-        const caller = await runBundle({ ...FORM_BASE, selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS })
+        const caller = await runBundle({ ...FORM_BASE, selectedNote: OPEN_NOTE, noteTags: OPEN_TAGS, settings: { tagsFrom: 'always' } })
         await withWarnings(caller, () => caller.commands.find(item => item.name === 'jot.open').execute({ mode: 'new', type: 'todo' }))
         assert.deepStrictEqual([tagsValue(caller.dialogHtml[0]), noteReads(caller)], ['', []], 'another plugin\'s form has no note you are in')
     })
 
+    await check('issue 6: the Back link starts on Add for notes from text with "For notes from text in a note" and on Don\'t add for a quick note; the notebook setting is for quick notes only by default, so a note from text starts in its note\'s notebook', async () => {
+        const text = await openSelectionWith('Idea', { selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never', backlinkFor: 'text' } })
+        assert.strictEqual(segValue(text.state.dialogHtml[0], 'jotBacklink'), 'add')
+        const quick = await openFormWith({ selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never', backlinkFor: 'text' } })
+        assert.strictEqual(segValue(quick.state.dialogHtml[0], 'jotBacklink'), 'none')
+        const quickInbox = await openFormWith({ selectedNote: OPEN_NOTE, settings: { defaultNotebook: 'fArch' } })
+        assert.strictEqual(islandOf(quickInbox.state.dialogHtml[0]).data.defaults.notebookId, 'fArch', 'a quick note: the inbox')
+        const textHome = await openSelectionWith('Idea', { selectedNote: OPEN_NOTE, settings: { defaultNotebook: 'fArch' } })
+        assert.strictEqual(islandOf(textHome.state.dialogHtml[0]).data.defaults.notebookId, 'fProj', 'from text: the note\'s own notebook')
+        const triggerHome = await fireTriggerWith({ selectedNote: OPEN_NOTE, settings: { defaultNotebook: 'fArch' } })
+        assert.strictEqual(islandOf(triggerHome.state.dialogHtml[0]).data.defaults.notebookId, 'fProj', 'by the typed trigger: the same')
+        const all = await openSelectionWith('Idea', { selectedNote: OPEN_NOTE, settings: { defaultNotebook: 'fArch', defaultNotebookFor: 'all' } })
+        assert.strictEqual(islandOf(all.state.dialogHtml[0]).data.defaults.notebookId, 'fArch', 'All notes: the inbox for everything')
+        assert.deepStrictEqual([FormModel.appliesFor('text', true), FormModel.appliesFor('text', false), FormModel.appliesFor('always', false), FormModel.appliesFor('never', true), FormModel.appliesFor('x', true)],
+            [true, false, true, false, false])
+        assert.deepStrictEqual([FormModel.notebookSettingApplies('quick', false), FormModel.notebookSettingApplies('quick', true), FormModel.notebookSettingApplies('all', true)], [true, false, true])
+    })
+
+    await check('issue 6: 0.2.0\'s choices carry over once - tags switched off becomes Never, a back link switched on becomes Always, each old switch then back at its default; an install that never touched them writes nothing', async () => {
+        const untouched = await runBundle({ versionInfo: DESKTOP })
+        assert.deepStrictEqual(untouched.settingWrites, [])
+        const changed = await runBundle({ versionInfo: DESKTOP, settings: { copyTags: false, backlink: true } })
+        assert.deepStrictEqual(changed.settingWrites, [
+            { key: 'tagsFrom', value: 'never' }, { key: 'copyTags', value: true },
+            { key: 'backlinkFor', value: 'always' }, { key: 'backlink', value: false },
+        ])
+    })
+
     await check('issue 2: the Back link row (Add / Don\'t add) starts on the setting (off); Add puts the line first, an empty line, then the text; bottom puts it last; the form\'s choice wins', async () => {
-        const off = await openFormWith({ selectedNote: OPEN_NOTE, settings: { copyTags: false }, dialogResults: [formResult('ok', { title: 'T', body: 'text', backlink: 'add' })] })
+        const off = await openFormWith({ selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never' }, dialogResults: [formResult('ok', { title: 'T', body: 'text', backlink: 'add' })] })
         const html = off.state.dialogHtml[0]
         assert.strictEqual(segValue(html, 'jotBacklink'), 'none', 'off by default: Don\'t add')
         assert.ok(html.includes('title="Parent to-do: [Reading \\[list\\]](:/nOpen)">Add</button>'), 'Add shows the line it adds as its tooltip')
         assert.strictEqual(notePosts(off.state)[0].body.body, 'Parent to-do: [Reading \\[list\\]](:/nOpen)\n\ntext', 'Add chosen in the form: first line, an empty line, the text')
-        const on = await openFormWith({ selectedNote: OPEN_NOTE, settings: { copyTags: false, backlink: true, backlinkPosition: 'bottom' },
+        const on = await openFormWith({ selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never', backlinkFor: 'always', backlinkPosition: 'bottom' },
             dialogResults: [formResult('ok', { title: 'T', body: 'text\n\n' })] })
         assert.strictEqual(segValue(on.state.dialogHtml[0], 'jotBacklink'), 'add')
         assert.strictEqual(notePosts(on.state)[0].body.body, 'text\n\nParent to-do: [Reading \\[list\\]](:/nOpen)', 'bottom: the text, one empty line, the link; a result without the field takes the setting')
-        const declined = await openFormWith({ selectedNote: OPEN_NOTE, settings: { copyTags: false, backlink: true }, dialogResults: [formResult('ok', { title: 'T', body: 'text', backlink: 'none' })] })
+        const declined = await openFormWith({ selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never', backlinkFor: 'always' }, dialogResults: [formResult('ok', { title: 'T', body: 'text', backlink: 'none' })] })
         assert.strictEqual(notePosts(declined.state)[0].body.body, 'text', 'Don\'t add in the form wins over the setting')
-        const alone = await openFormWith({ selectedNote: OPEN_NOTE, settings: { copyTags: false, backlink: true }, dialogResults: [formResult('ok', { title: 'Only a title' })] })
+        const alone = await openFormWith({ selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never', backlinkFor: 'always' }, dialogResults: [formResult('ok', { title: 'Only a title' })] })
         assert.strictEqual(notePosts(alone.state)[0].body.body, 'Parent to-do: [Reading \\[list\\]](:/nOpen)', 'no text: the link alone')
-        const empty = await openFormWith({ selectedNote: OPEN_NOTE, settings: { copyTags: false, backlink: true }, dialogResults: [formResult('ok', {})] })
+        const empty = await openFormWith({ selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never', backlinkFor: 'always' }, dialogResults: [formResult('ok', {})] })
         assert.deepStrictEqual(notePosts(empty.state), [], 'an empty Title and Text create nothing, back link or not')
     })
 
     await check('issue 2: the back link text is the setting with Copy Note ID\'s placeholders, for the note you are in; no row without a note, on the caller\'s route, or in edit mode', async () => {
-        const custom = await openFormWith({ selectedNote: { id: 'nOpen', title: 'Plan', is_todo: 0, parent_id: 'fProj' }, settings: { copyTags: false, backlink: true,
+        const custom = await openFormWith({ selectedNote: { id: 'nOpen', title: 'Plan', is_todo: 0, parent_id: 'fProj' }, settings: { tagsFrom: 'never', backlinkFor: 'always',
             backlinkTemplate: 'From {Note-Type} "{note title}" in {notebook path} ({notebook_name}, {notebook_id}) {note_id} {mystery}' },
             dialogResults: [formResult('ok', { title: 'T' })] })
         assert.strictEqual(notePosts(custom.state)[0].body.body, 'From note "Plan" in Work/Projects (Projects, fProj) nOpen {mystery}', 'forgiving names; an unknown placeholder stays as written')
-        const blank = await openFormWith({ selectedNote: OPEN_NOTE, settings: { copyTags: false, backlink: true, backlinkTemplate: '   ' }, dialogResults: [formResult('ok', { title: 'T' })] })
+        const blank = await openFormWith({ selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never', backlinkFor: 'always', backlinkTemplate: '   ' }, dialogResults: [formResult('ok', { title: 'T' })] })
         assert.strictEqual(notePosts(blank.state)[0].body.body, 'Parent to-do: [Reading \\[list\\]](:/nOpen)', 'an empty text is the default')
         const none = await openFormWith({ selectedNote: null })
         assert.ok(!none.state.dialogHtml[0].includes('jotBacklinkRow'), 'no note open: no row')
         const caller = await runBundle({ ...FORM_BASE, selectedNote: OPEN_NOTE })
         await withWarnings(caller, () => caller.commands.find(item => item.name === 'jot.open').execute({ mode: 'new' }))
         assert.ok(!caller.dialogHtml[0].includes('jotBacklinkRow'), 'the caller\'s route: no row')
-        const edit = await editWith({ selectedNote: OPEN_NOTE, settings: { backlink: true } })
+        const edit = await editWith({ selectedNote: OPEN_NOTE, settings: { backlinkFor: 'always' } })
         assert.ok(!edit.state.dialogHtml[0].includes('jotBacklinkRow') && !edit.state.dialogHtml[0].includes('jotOpenRow'), 'edit mode: neither Back link nor Open')
     })
 
@@ -2478,7 +2520,7 @@ async function main() {
     })
 
     await check('popup: one line per selector in the order Type, Title, Text, Notebook, Tags, In this note, Back link, Open, Due (last); a keyboard hint in the heading on desktop only', async () => {
-        const { state } = await openSelectionWith('Pay rent', { selectedNote: OPEN_NOTE, settings: { copyTags: false } })
+        const { state } = await openSelectionWith('Pay rent', { selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never' } })
         const html = state.dialogHtml[0]
         const order = ['jotTypeRow', 'id="jotTitle"', 'id="jotBody"', 'id="jotNotebook"', 'id="jotTags"', 'jotInThisNoteRow', 'jotBacklinkRow', 'jotOpenRow', 'jotDueRow', 'id="jotPicker"']
         const positions = order.map(marker => html.indexOf(marker))

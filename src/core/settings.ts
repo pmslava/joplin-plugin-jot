@@ -2,7 +2,8 @@
  * Jot's settings, under Settings > Plugins > Jot: what every part of the form starts with - the type, the notebook, the tags of the note you are  *
  * in, the back link, whether the new note opens, the In this note choice for highlighted text and for the typed trigger - and the typed trigger, the *
  * day start time and the toolbar button. Every selector in the form has its default here and remembers nothing between opens (issue 5: the In this  *
- * note choice used to be remembered from the last create instead). The notebook, tags and back link settings answer issues 3, 1 and 2.             *
+ * note choice used to be remembered from the last create instead). The notebook, tags and back link settings answer issues 3, 1 and 2, and depend *
+ * on how Jot was opened (issue 6): a quick note (nothing highlighted) or a note from text in a note (highlighted text, the typed trigger).          *
  *                                                                                                                                                  *
  * WHEN A CHANGED TRIGGER APPLIES. The Markdown editor's content script asks for the trigger when it loads, whenever the editor is given another note *
  * (or its text is replaced from outside, as a sync does) and after every fire (src/contentScript.ts). Settings is a screen of its own on both       *
@@ -25,8 +26,12 @@ import { SettingItemType } from "api/types"
 export const SECTION = "jot"
 export const DEFAULT_TYPE_KEY = "defaultType"
 export const DEFAULT_NOTEBOOK_KEY = "defaultNotebook"
-export const COPY_TAGS_KEY = "copyTags"
-export const BACKLINK_KEY = "backlink"
+export const TAGS_FROM_KEY = "tagsFrom"
+export const BACKLINK_FOR_KEY = "backlinkFor"
+export const DEFAULT_NOTEBOOK_FOR_KEY = "defaultNotebookFor"
+// 0.2.0's two switches, kept hidden only so migrateSettings can carry a choice made in them over to tagsFrom and backlinkFor.
+export const OLD_COPY_TAGS_KEY = "copyTags"
+export const OLD_BACKLINK_KEY = "backlink"
 export const BACKLINK_TEMPLATE_KEY = "backlinkTemplate"
 export const BACKLINK_POSITION_KEY = "backlinkPosition"
 export const OPEN_AFTER_CREATE_KEY = "openAfterCreate"
@@ -48,6 +53,13 @@ export const BACKLINK_BOTTOM = "bottom"
 export const DEFAULT_BACKLINK_TEMPLATE = "Parent {note_type}: {note_link}"
 // The notebook setting's "The current notebook" value.
 export const CURRENT_NOTEBOOK = ""
+// When the tags and the back link apply (issue 6): never, for notes from text in a note (highlighted text or the typed trigger), or always.
+export const FOR_NEVER = "never"
+export const FOR_TEXT = "text"
+export const FOR_ALWAYS = "always"
+// What the notebook setting applies to: quick notes only (the shortcut, the menu, the toolbar button with nothing highlighted), or all notes.
+export const NOTEBOOK_FOR_QUICK = "quick"
+export const NOTEBOOK_FOR_ALL = "all"
 // The In this note choices (formModel's KEEP, REPLACE, AFTER): the selectionAction setting's values, replace by default (formModel.SELECTION_DEFAULT).
 export const SELECTION_REPLACE = "replace"
 export const SELECTION_KEEP = "keep"
@@ -105,19 +117,44 @@ export async function setupSettings(){
             section: SECTION,
         },
         [DEFAULT_NOTEBOOK_KEY]: notebookSettingSpec([]),
-        [COPY_TAGS_KEY]: {
-            label: "Fill in the tags of the note you are in",
-            description: "The form's Tags start with the tags of the note you are in, when there is one. Change or clear them in the form.",
-            value: true,
-            type: SettingItemType.Bool,
+        [DEFAULT_NOTEBOOK_FOR_KEY]: {
+            label: "Use the Notebook setting for",
+            description: "Quick notes are the ones Jot opens with nothing highlighted: the shortcut, the menu, the toolbar button. With Quick notes only, a note from text in a note (highlighted text or the typed trigger) starts in that note's notebook.",
+            value: NOTEBOOK_FOR_QUICK,
+            type: SettingItemType.String,
+            isEnum: true,
+            options: {
+                [NOTEBOOK_FOR_QUICK]: "Quick notes only",
+                [NOTEBOOK_FOR_ALL]: "All notes",
+            },
             public: true,
             section: SECTION,
         },
-        [BACKLINK_KEY]: {
+        [TAGS_FROM_KEY]: {
+            label: "Fill in the tags of the note you are in",
+            description: "For notes from text in a note: when Jot is opened from highlighted text or by the typed trigger, the form's Tags start with the tags of that note. Always: whenever you are in a note. You can change or clear them in the form.",
+            value: FOR_TEXT,
+            type: SettingItemType.String,
+            isEnum: true,
+            options: {
+                [FOR_NEVER]: "Never",
+                [FOR_TEXT]: "For notes from text in a note",
+                [FOR_ALWAYS]: "Always",
+            },
+            public: true,
+            section: SECTION,
+        },
+        [BACKLINK_FOR_KEY]: {
             label: "Add a back link to the note you are in",
-            description: "Where the form's Back link starts. You can switch it in the form.",
-            value: false,
-            type: SettingItemType.Bool,
+            description: "Where the form's Back link starts: on Add for notes from text in a note (highlighted text or the typed trigger), always, or never. You can switch it in the form.",
+            value: FOR_NEVER,
+            type: SettingItemType.String,
+            isEnum: true,
+            options: {
+                [FOR_NEVER]: "Never",
+                [FOR_TEXT]: "For notes from text in a note",
+                [FOR_ALWAYS]: "Always",
+            },
             public: true,
             section: SECTION,
         },
@@ -207,7 +244,42 @@ export async function setupSettings(){
             public: true,
             section: SECTION,
         },
+        [OLD_COPY_TAGS_KEY]: {
+            label: "Fill in the tags of the note you are in (0.2.0, carried over to tagsFrom)",
+            value: true,
+            type: SettingItemType.Bool,
+            public: false,
+            section: SECTION,
+        },
+        [OLD_BACKLINK_KEY]: {
+            label: "Add a back link to the note you are in (0.2.0, carried over to backlinkFor)",
+            value: false,
+            type: SettingItemType.Bool,
+            public: false,
+            section: SECTION,
+        },
     })
+    await migrateSettings()
+}
+
+/** migrateSettings *********************************************************************************************************************************
+ * Carries 0.2.0's two switches over to their three-way successors once (issue 6): tags switched off becomes Never, a back link switched on becomes   *
+ * Always. Each old switch is then put back to its default, so the carry-over happens once and never overrides a later choice. Nothing is written   *
+ * on an install that never touched them, which gets the new defaults (tags for notes from text, no back link). Never throws.                      *
+ ***************************************************************************************************************************************************/
+async function migrateSettings(){
+    try {
+        if ((await joplin.settings.value(OLD_COPY_TAGS_KEY)) === false){
+            await joplin.settings.setValue(TAGS_FROM_KEY, FOR_NEVER)
+            await joplin.settings.setValue(OLD_COPY_TAGS_KEY, true)
+        }
+        if ((await joplin.settings.value(OLD_BACKLINK_KEY)) === true){
+            await joplin.settings.setValue(BACKLINK_FOR_KEY, FOR_ALWAYS)
+            await joplin.settings.setValue(OLD_BACKLINK_KEY, false)
+        }
+    } catch (error) {
+        console.warn("Jot: could not carry the 0.2.0 tag and back link settings over", error)
+    }
 }
 
 /** getDefaultType **********************************************************************************************************************************
@@ -238,19 +310,28 @@ export async function getDefaultNotebookId(): Promise<string> {
     }
 }
 
-/** getCopyTags / getBacklinkSettings ***************************************************************************************************************
- * Whether the Tags start with the current note's tags (on unless switched off); and the back link's default, text and position (off; the default    *
- * text when empty; top unless bottom).                                                                                                             *
+/** getTagsFrom / getBacklinkSettings / getDefaultNotebookFor **************************************************************************************
+ * When the Tags start with the current note's tags ("never", "text" or "always"; anything else is "text", the default); the back link's: when it    *
+ * starts on Add ("never" unless "text" or "always"), its text (the default when empty) and position (top unless bottom); and what the notebook      *
+ * setting applies to ("quick" unless "all").                                                                                                       *
  ***************************************************************************************************************************************************/
-export async function getCopyTags(): Promise<boolean> {
-    return (await joplin.settings.value(COPY_TAGS_KEY)) !== false
+function forValue(value: unknown, fallback: string): string {
+    return value === FOR_NEVER || value === FOR_TEXT || value === FOR_ALWAYS ? value : fallback
 }
 
-export async function getBacklinkSettings(): Promise<{ on: boolean, template: string, position: string }> {
-    const on = (await joplin.settings.value(BACKLINK_KEY)) === true
+export async function getTagsFrom(): Promise<string> {
+    return forValue(await joplin.settings.value(TAGS_FROM_KEY), FOR_TEXT)
+}
+
+export async function getDefaultNotebookFor(): Promise<string> {
+    return (await joplin.settings.value(DEFAULT_NOTEBOOK_FOR_KEY)) === NOTEBOOK_FOR_ALL ? NOTEBOOK_FOR_ALL : NOTEBOOK_FOR_QUICK
+}
+
+export async function getBacklinkSettings(): Promise<{ for: string, template: string, position: string }> {
+    const when = forValue(await joplin.settings.value(BACKLINK_FOR_KEY), FOR_NEVER)
     const template = String((await joplin.settings.value(BACKLINK_TEMPLATE_KEY)) || "").trim() || DEFAULT_BACKLINK_TEMPLATE
     const position = (await joplin.settings.value(BACKLINK_POSITION_KEY)) === BACKLINK_BOTTOM ? BACKLINK_BOTTOM : BACKLINK_TOP
-    return { on, template, position }
+    return { for: when, template, position }
 }
 
 /** registerNotebookChoices *************************************************************************************************************************

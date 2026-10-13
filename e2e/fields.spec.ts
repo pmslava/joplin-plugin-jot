@@ -70,7 +70,10 @@ test.describe('Growing Title and Tags, and the In this note defaults (desktop)',
 
   test('Tags grow to three lines and then scroll; Tab puts the caret at the end, a click where it lands; Enter in Tags creates and adds no new line', async () => {
     const { win } = joplin;
-    const pending = startJot(win);
+    // From highlighted text, so the Tags start with the note's sixteen tags (issue 6: a quick note starts with none).
+    await callPluginCommand(win, 'editor.execCommand', { name: 'select', args: [0, 18] });
+    await expect.poll(async () => callPluginCommand(win, 'selectedText'), { timeout: 10_000 }).toBe('Idea worth keeping');
+    const pending = startJot(win, 'jot.fromSelection');
     const form = await formFrame(win);
     const title = await field(form, 'jotTitle');
     let tags = await field(form, 'jotTags');
@@ -99,13 +102,17 @@ test.describe('Growing Title and Tags, and the In this note defaults (desktop)',
     expect(tags.active).toBe(true);
     expect(tags.start).toBeLessThan(5);
 
-    // No list is open (a click opens none on a field with tags), so Enter in Tags is the form's: it creates, and no new line is made.
-    await win.keyboard.press('Control+End');
+    // Keep the highlighted text as it is (the last case selects it again), then Enter in Tags: no list is open (focus opens one only on an empty
+    // field), so Enter is the form's - it creates, and no new line is made.
+    await form.locator('#jotInThisNoteRow .jot-seg-option[data-value="keep"]').click();
+    await form.locator('#jotTags').focus();
     await win.keyboard.press('Enter');
     const outcome: any = await pending;
     expect(outcome && outcome.id).toBeTruthy();
     const created = await api.get(`/notes/${outcome.id}/tags?fields=title&limit=100`);
     expect(created.items.map((tag: any) => tag.title).sort()).toEqual([...TAGS].sort());
+    // Nothing left highlighted, so the next case's shortcut opens a quick note.
+    await callPluginCommand(win, 'editor.execCommand', { name: 'select', args: [0, 0] });
   });
 
   test('Title grows with a long title; a pasted line break becomes a space; Enter in the Title creates', async () => {

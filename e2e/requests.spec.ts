@@ -99,17 +99,29 @@ test.describe('The 0.2 requests (desktop)', () => {
     expect((await api.get(`/notes/${outcome.id}?fields=title`)).title).toBe(title);
   });
 
-  test('issue 1: the Tags start with the tags of the note you are in, and the new note gets them', async () => {
+  test('issues 1 and 6: a quick note starts with no tags; from highlighted text the Tags start with the note\'s tags, and the new note gets them', async () => {
     const { win } = joplin;
+    const quick = startJot(win);
+    const quickForm = await formFrame(win);
+    await expect(quickForm.locator('#jotTags')).toHaveValue('');
+    await dialogButton(win, 'Cancel').click();
+    expect(await quick).toBeNull();
+
     const title = `Tagged ${stamp}`;
-    const pending = startJot(win);
+    await callPluginCommand(win, 'editor.execCommand', { name: 'select', args: [0, 9] });
+    await expect.poll(async () => callPluginCommand(win, 'selectedText'), { timeout: 10_000 }).toBe('What I am');
+    const pending = callPluginCommand(win, 'jot.fromSelection');
+    pending.catch(() => undefined);
     const form = await formFrame(win);
     await expect(form.locator('#jotTags')).toHaveValue(`alpha-${stamp}, beta-${stamp}, `);
+    await form.locator('#jotInThisNoteRow .jot-seg-option[data-value="keep"]').click();
     await form.locator('#jotTitle').fill(title);
     await dialogButton(win, 'Create').click();
     const outcome: any = await pending;
     const tags = await api.get(`/notes/${outcome.id}/tags?fields=title`);
     expect(tags.items.map((tag: any) => tag.title).sort()).toEqual([`alpha-${stamp}`, `beta-${stamp}`]);
+    // Nothing left highlighted: the next case's shortcut must open a quick note, not take this selection (one chord serves both).
+    await callPluginCommand(win, 'editor.execCommand', { name: 'select', args: [0, 0] });
     await expect.poll(async () => selectedNoteId(win).catch(() => ''), { timeout: 10_000 }).toBe(readingId);
   });
 
@@ -144,6 +156,17 @@ test.describe('The 0.2 requests (desktop)', () => {
     await screen.locator('.button-bar button', { hasText: 'OK' }).first().click();
     await expect.poll(async () => screen.isVisible().catch(() => false), { timeout: 30_000 }).toBe(false);
     await expect.poll(async () => selectedNoteId(win).catch(() => ''), { timeout: 20_000 }).toBe(readingId);
+
+    // Issue 6: the inbox is for quick notes only by default; a note from highlighted text starts in its own note's notebook.
+    await callPluginCommand(win, 'editor.execCommand', { name: 'select', args: [0, 9] });
+    await expect.poll(async () => callPluginCommand(win, 'selectedText'), { timeout: 10_000 }).toBe('What I am');
+    const fromText = callPluginCommand(win, 'jot.fromSelection');
+    fromText.catch(() => undefined);
+    const textForm = await formFrame(win);
+    await expect(textForm.locator('#jotNotebook')).toHaveValue(book);
+    await dialogButton(win, 'Cancel').click();
+    expect(await fromText).toBeNull();
+    await callPluginCommand(win, 'editor.execCommand', { name: 'select', args: [0, 0] });
 
     const title = `Inboxed ${stamp}`;
     const pending = startJot(win);

@@ -52,7 +52,8 @@
 import joplin from "api"
 import { buildFormHtml, FormNotebook, FormValues } from "./formHtml"
 import {
-    getBacklinkSettings, getCopyTags, getDayStartTime, getDefaultNotebookId, getDefaultType, getOpenAfterCreate, getSelectionAction, getTriggerAction,
+    getBacklinkSettings, getDayStartTime, getDefaultNotebookFor, getDefaultNotebookId, getDefaultType, getOpenAfterCreate, getSelectionAction, getTagsFrom,
+    getTriggerAction,
     OPEN_IN_WINDOW, registerNotebookChoices,
 } from "../core/settings"
 import { isMobile } from "../core/platform"
@@ -306,10 +307,13 @@ async function inThisNoteFor(route: string, presets: FormPresets): Promise<InThi
 
 async function runForm(route: string, presets: FormPresets): Promise<Created | null> {
     // Everything the form shows, read at once (the pages of a long list are still read one after the other).
-    const [folders, tagList, defaultType, dayStartSetting, mobile, settingNotebookId, copyTags, backlinkSettings, openDefault, editorNote, row] = await Promise.all([
-        getAllFolders(), getAllTags(), getDefaultType(), getDayStartTime(), isMobile(), getDefaultNotebookId(), getCopyTags(), getBacklinkSettings(),
-        getOpenAfterCreate(), route === CALLER_ROUTE ? Promise.resolve(undefined) : selectedNote(), inThisNoteFor(route, presets),
+    const [folders, tagList, defaultType, dayStartSetting, mobile, settingNotebookId, notebookFor, tagsFrom, backlinkSettings, openDefault, editorNote, row] = await Promise.all([
+        getAllFolders(), getAllTags(), getDefaultType(), getDayStartTime(), isMobile(), getDefaultNotebookId(), getDefaultNotebookFor(), getTagsFrom(),
+        getBacklinkSettings(), getOpenAfterCreate(), route === CALLER_ROUTE ? Promise.resolve(undefined) : selectedNote(), inThisNoteFor(route, presets),
     ])
+    // Issue 6: a note from text in a note (highlighted text, the typed trigger) and a quick note (nothing highlighted) start differently - the tags,
+    // the back link and the notebook each say for which.
+    const fromText = route === SELECTION_ROUTE || route === TRIGGER_ROUTE
     const notebooks: FormNotebook[] = FormModel.buildNotebookPaths(folders)
     void registerNotebookChoices(notebooks)
     if (!notebooks.length){
@@ -322,10 +326,10 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
     // The note the user is in (not on the caller's route: another plugin's panel has no such note): its tags fill the Tags when the setting says,
     // and the back link points to it.
     const parent = route !== CALLER_ROUTE && editorNote && editorNote.id ? editorNote : null
-    const parentTags = parent && copyTags ? await readNoteTagsCsv(parent.id) : ""
+    const parentTags = parent && FormModel.appliesFor(tagsFrom, fromText) ? await readNoteTagsCsv(parent.id) : ""
     const backlinkLine = parent ? FormModel.backlinkText(backlinkSettings.template, parent, folders) : ""
-    const backlink = backlinkLine ? { text: backlinkLine, position: backlinkSettings.position, on: backlinkSettings.on } : null
-    const notebookId = await currentNotebookId(notebooks, presets.notebookId, settingNotebookId, editorNote)
+    const backlink = backlinkLine ? { text: backlinkLine, position: backlinkSettings.position, on: FormModel.appliesFor(backlinkSettings.for, fromText) } : null
+    const notebookId = await currentNotebookId(notebooks, presets.notebookId, FormModel.notebookSettingApplies(notebookFor, fromText) ? settingNotebookId : "", editorNote)
     const inThisNoteChoices = row.choices
     const open = FormModel.openChoice(openDefault, mobile)
 
