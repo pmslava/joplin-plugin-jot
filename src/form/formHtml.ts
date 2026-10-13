@@ -11,7 +11,7 @@
  * notebook id, day start time) - travels in a <script type="application/json"> element, with every "<" written as < so no value can close it.  *
  * setHtml writes the markup through innerHTML, so the element is never executed, only read.                                                         *
  *                                                                                                                                                  *
- * THE SELECTORS are one-line segmented controls, one builder for all (segmentRow): Type (To-do, Note); In this note on the selection and trigger    *
+ * THE SELECTORS are one-line segmented controls, one builder for all (segmentRow): Type (Note, To-do); In this note on the selection and trigger    *
  * routes (Replace with link, Keep text and, in the Markdown editor, Add link after; or Replace ++ with link and Remove ++ - short labels, the full    *
  * wording as each button's tooltip, the default first); Back link (Add, Don't add) when there is a note to link back to, the line it would add as    *
  * the Add button's tooltip; and Open (No, In editor, New window; no window on mobile). Each is a radiogroup of buttons over a hidden input named     *
@@ -155,9 +155,10 @@ export function buildFormHtml(view: FormView): string {
     // A hidden marker on mobile only, as Cockpit's #cockpitPlatform: the script mirrors it onto #joplin-plugin-content as the jot-mobile class,
     // which the narrow layout in form.css is gated on (never a viewport @media query, which would also match Joplin's measuring pass).
     const platformMarker = view.mobile ? '<div id="jotPlatform" hidden></div>' : ""
+    // Note first, then To-do: the order of Cockpit's New note and New to-do buttons, and of Joplin's own.
     const typeRow = segmentRow("jotType", "type", "Type", [
-        { value: FormModel.TODO, label: "To-do" },
         { value: FormModel.NOTE, label: "Note" },
+        { value: FormModel.TODO, label: "To-do" },
     ], type)
     const inThisNoteRow = !choices.length ? "" : segmentRow("jotInThisNote", "inThisNote", "In this note", choices.map(value => ({
         value,

@@ -2521,6 +2521,14 @@ async function main() {
         assert.strictEqual(segValue(mobile.state.dialogHtml[0], 'jotOpen'), 'editor', 'a window setting on mobile starts on In editor')
     })
 
+    await check('Type: Note first, then To-do (the order of Cockpit\'s New note and New to-do buttons), in the form and in the setting; the default stays To-do', async () => {
+        const { state } = await openFormWith({})
+        const group = /data-field="type">([\s\S]*?)<\/div>/.exec(state.dialogHtml[0])[1]
+        assert.deepStrictEqual((group.match(/data-value="([a-z]+)"/g) || []).map(match => match.slice(12, -1)), ['note', 'todo'])
+        assert.strictEqual(segValue(state.dialogHtml[0], 'jotType'), 'todo')
+        assert.deepStrictEqual(Object.keys(state.settingSpecs.defaultType.options), ['note', 'todo'])
+    })
+
     await check('popup: one line per selector in the order Type, Title, Text, Notebook, Tags, In this note, Back link, Open, Due (last); a keyboard hint in the heading on desktop only', async () => {
         const { state } = await openSelectionWith('Pay rent', { selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never' } })
         const html = state.dialogHtml[0]

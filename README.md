@@ -32,7 +32,7 @@ In Joplin, Settings › Plugins › search for Jot and install it. Or download `
 
 Type, Title, Text, Notebook, Tags, then the choices, and Due last. The title is focused when the form opens, so typing a title and pressing Enter is all a capture needs; Enter creates from anywhere in the form except the Text, where it is a new line, so a date picked with the mouse is followed by Enter as well; with the title still empty, Enter keeps the form open and puts the cursor back in the title. Every choice is one line of buttons you click or move through with the arrow keys:
 
-- **Type**: To-do or Note.
+- **Type**: Note or To-do, in the order of Cockpit's buttons.
 - **In this note**, when the form was opened from highlighted text: Replace with link (the default), Keep text, or Add link after. Opened by `++`: Replace `++` with link (the default) or Remove `++`. Each starts on its setting.
 - **Back link**: Add puts a line linking to the note you are in at the top of the new note, then an empty line, then the text (or at the bottom, by setting). Hover Add to see the line. It starts on the setting, Don't add unless you change it.
 - **Open**: No (stay where you are, the default), In editor, or New window. It starts on the setting.

@@ -109,8 +109,8 @@ export async function setupSettings(){
             type: SettingItemType.String,
             isEnum: true,
             options: {
-                [TYPE_TODO]: "A to-do",
                 [TYPE_NOTE]: "A note",
+                [TYPE_TODO]: "A to-do",
             },
             public: true,
             section: SECTION,
