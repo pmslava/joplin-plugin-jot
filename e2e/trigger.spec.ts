@@ -11,8 +11,8 @@ import { activateJoplinMenuItem, callPluginCommand, createNotebook, dataApi, dat
  * starts, so a case simply waits for the dialog to appear, drives it, and reads back what the content script did to
  * the editor's document (CodeMirror's own state, read from the page) and what was created (the data API).
  *
- * The In this note default is the choice remembered from the last create in this profile, so `lastChoice` follows
- * it; it is reset in beforeAll, with the fresh profile, so a retried case in a new worker expects the right one.
+ * In this note starts on its setting on every open (issue 5: the choice is no longer remembered between creates), and
+ * this profile keeps the setting's default, so every case expects that default (`lastChoice`).
  * The last case changes the trigger setting through the Options screen, so it runs last.
  */
 test.describe('The typed trigger (desktop, Markdown editor)', () => {
@@ -23,7 +23,8 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
   const api = dataApi(API_PORT, API_TOKEN);
   const book = `Jot Trigger ${stamp}`;
   let bookId = '';
-  let lastChoice = 'link';
+  // In this note starts on its setting on every open (issue 5: nothing is remembered); this profile keeps the default.
+  const lastChoice = 'link';
   // How long a case waits to be sure that something did NOT open the form.
   const QUIET_MS = 2500;
 
@@ -36,7 +37,6 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
     const found = folders.items.find((folder: any) => folder.title === book);
     if (!found) throw new Error(`no notebook ${book}`);
     bookId = found.id;
-    lastChoice = 'link';
   });
 
   test.afterAll(async () => {
@@ -150,7 +150,6 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
     await form.locator('#jotTitle').fill(title);
     await dialogButton(win, 'Create').click();
     await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
-    lastChoice = 'remove';
 
     await expect.poll(async () => editorDoc(win), { timeout: 20_000 }).toBe('hello ');
     await expect.poll(async () => noteIdByTitle(title), { timeout: 20_000 }).not.toBe('');
@@ -182,7 +181,6 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
     await form.locator('#jotTitle').fill(title);
     await dialogButton(win, 'Create').click();
     await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
-    lastChoice = 'link';
 
     await expect.poll(async () => noteIdByTitle(title), { timeout: 20_000 }).not.toBe('');
     const id = await noteIdByTitle(title);
@@ -261,7 +259,6 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
     await expect(form.locator('#jotOpen')).toHaveValue('editor');
     await dialogButton(win, 'Create').click();
     await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
-    lastChoice = 'remove';
 
     await expect.poll(async () => noteIdByTitle(title), { timeout: 20_000 }).not.toBe('');
     const id = await noteIdByTitle(title);

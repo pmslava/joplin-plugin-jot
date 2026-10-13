@@ -301,6 +301,12 @@ async function openSelectionWith(selection, options, command = 'jot.fromSelectio
     return { state, outcome }
 }
 
+// A growing field's content (Title, Tags) or the Text's, as the markup writes it: a textarea whose content starts with a newline.
+function fieldValue(html, name) {
+    const match = new RegExp(`<textarea name="${name}"[^>]*>\\n([\\s\\S]*?)</textarea>`).exec(html)
+    return match ? match[1] : undefined
+}
+
 // The In this note group of a form's markup ('' without the row), its buttons' labels in order (short, one line) and their tooltips (the full
 // wording, which the labels shorten).
 function choiceGroup(html) {
@@ -656,20 +662,26 @@ async function main() {
     })
 
     // ---------------------------------------------------------------- settings and the toolbar gate
-    await check('settings: section Jot with exactly defaultType, defaultNotebook, copyTags, backlink, backlinkTemplate, backlinkPosition, openAfterCreate, trigger, dayStartTime and showToolbarButton on screen, and the hidden lastSelectionAction and lastTriggerAction', () => {
+    await check('settings: section Jot with exactly defaultType, defaultNotebook, copyTags, backlink, backlinkTemplate, backlinkPosition, openAfterCreate, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton, all on screen', () => {
         assert.deepStrictEqual(desktop.sections.map(section => [section.name, section.spec.label]), [['jot', 'Jot']])
         const specs = desktop.settingSpecs
         assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'defaultNotebook', 'copyTags', 'backlink', 'backlinkTemplate', 'backlinkPosition', 'openAfterCreate',
-            'trigger', 'dayStartTime', 'showToolbarButton', 'lastSelectionAction', 'lastTriggerAction'])
-        const hidden = ['lastSelectionAction', 'lastTriggerAction']
+            'selectionAction', 'trigger', 'triggerAction', 'dayStartTime', 'showToolbarButton'], 'every selector has its default on screen (issue 5); nothing hidden')
+        const hidden = []
         for (const key of Object.keys(specs)) {
             assert.strictEqual(specs[key].section, 'jot', `${key} is in the Jot section`)
             assert.strictEqual(specs[key].public, !hidden.includes(key), `${key} is ${hidden.includes(key) ? 'hidden' : 'public'}`)
         }
-        assert.deepStrictEqual([specs.lastSelectionAction.value, specs.lastSelectionAction.type, specs.lastSelectionAction.isEnum], ['replace', 2, undefined],
-            'a per-device string, replace until the user picks another')
-        assert.deepStrictEqual([specs.lastTriggerAction.value, specs.lastTriggerAction.type, specs.lastTriggerAction.isEnum], ['link', 2, undefined],
-            'a per-device string, link until the user picks another')
+        assert.deepStrictEqual({ label: specs.selectionAction.label, description: specs.selectionAction.description, value: specs.selectionAction.value, isEnum: specs.selectionAction.isEnum, options: specs.selectionAction.options }, {
+            label: 'In this note, for highlighted text',
+            description: 'Where the form\'s In this note starts when Jot is opened from highlighted text. You can switch it in the form. Add a link after it is offered in the Markdown editor only; in the Rich Text editor the form starts on Replace instead.',
+            value: 'replace', isEnum: true, options: { replace: 'Replace it with a link to the new note', keep: 'Keep the text', after: 'Add a link after it' },
+        }, 'issue 5')
+        assert.deepStrictEqual({ label: specs.triggerAction.label, description: specs.triggerAction.description, value: specs.triggerAction.value, isEnum: specs.triggerAction.isEnum, options: specs.triggerAction.options }, {
+            label: 'In this note, for the typed trigger',
+            description: 'Where the form\'s In this note starts when Jot is opened by the typed trigger. You can switch it in the form.',
+            value: 'link', isEnum: true, options: { link: 'Replace the trigger with a link to the new note', remove: 'Remove the trigger' },
+        }, 'issue 5')
         const STRING = 2, BOOL = 3
         assert.deepStrictEqual(
             { label: specs.defaultType.label, description: specs.defaultType.description, value: specs.defaultType.value, type: specs.defaultType.type, isEnum: specs.defaultType.isEnum, options: specs.defaultType.options },
@@ -774,7 +786,7 @@ async function main() {
         const positions = order.map(marker => html.indexOf(marker))
         positions.forEach((position, index) => assert.ok(position >= 0, `${order[index]} is in the markup`))
         assert.deepStrictEqual(positions.slice().sort((a, b) => a - b), positions, 'the fields come in the brief\'s order')
-        assert.ok(/<input type="text" name="title"[^>]*\bautofocus\b/.test(html), 'the Title is a text input with autofocus')
+        assert.ok(/<textarea name="title" id="jotTitle" class="jot-input jot-grow" rows="1"[^>]*\bautofocus\b/.test(html), 'the Title is a growing field (one row to start) with autofocus')
         assert.ok(/<textarea name="body"[^>]*rows="3"/.test(html), 'the Text is a three-line textarea')
         assert.ok(/<input type="text" id="jotNotebook"[^>]*value="Work"/.test(html), 'the Notebook input shows the default notebook\'s path')
         assert.ok(/<input type="hidden" name="notebookId" id="jotNotebookId" value="fWork">/.test(html), 'and its id rides in the hidden notebookId')
@@ -951,9 +963,9 @@ async function main() {
         assert.deepStrictEqual(state.messageBoxes, ['Jot: the date must be YYYY-MM-DD and the time HH:MM (24-hour).'])
         assert.strictEqual(state.dialogOpens, 2)
         const again = state.dialogHtml[1]
-        assert.ok(/name="title"[^>]*value="Pay rent"/.test(again), 'the title is kept')
+        assert.strictEqual(fieldValue(again, 'title'), 'Pay rent', 'the title is kept')
         assert.ok(again.includes('>\nflat</textarea>'), 'the text is kept')
-        assert.ok(/name="tags"[^>]*value="home"/.test(again), 'the tags are kept')
+        assert.strictEqual(fieldValue(again, 'tags'), 'home', 'the tags are kept')
         assert.ok(/name="notebookId" id="jotNotebookId" value="fHome"/.test(again), 'the notebook is kept')
         assert.ok(/name="dueDate" id="jotDueDate" value="2026-02-31"/.test(again), 'the refused date is kept, to be corrected')
         assert.ok(/<div id="jotPicker" class="jot-picker">/.test(again), 'the picker is unfolded')
@@ -977,7 +989,7 @@ async function main() {
         assert.deepStrictEqual(state.executes, [READ_SELECTION], 'the selection is read before the form opens; Cancel runs nothing else')
         assert.deepStrictEqual(state.globalReads, ['editor.codeView'], 'which editor is up is read once, for the buttons')
         const html = state.dialogHtml[0]
-        assert.ok(/<input type="text" name="title"[^>]*value="Buy milk"/.test(html), 'the first non-empty line, trimmed, is the Title')
+        assert.strictEqual(fieldValue(html, 'title'), 'Buy milk', 'the first non-empty line, trimmed, is the Title')
         assert.ok(html.includes('>\nsemi-skimmed\n  2 litres</textarea>'), 'the lines after it, blank lines first dropped, are the Text as typed')
         const order = ['name="tags"', 'id="jotInThisNoteRow"', 'id="jotDueRow"', 'id="jotPicker"', 'id="jotNotebookList"']
         const positions = order.map(marker => html.indexOf(marker))
@@ -997,21 +1009,21 @@ async function main() {
     })
 
     await check('selection route: the In this note default is lastSelectionAction; the Rich Text editor (editor.codeView false, or unreadable) offers Keep and Replace only', async () => {
-        const remembered = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'replace' } })
+        const remembered = await openSelectionWith('Pay rent', { settings: { selectionAction: 'replace' } })
         assert.deepStrictEqual(islandOf(remembered.state.dialogHtml[0]).data.inThisNote, { choices: ['replace', 'keep', 'after'], value: 'replace', fallback: 'replace' })
-        const kept = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'keep' } })
+        const kept = await openSelectionWith('Pay rent', { settings: { selectionAction: 'keep' } })
         assert.strictEqual(islandOf(kept.state.dialogHtml[0]).data.inThisNote.value, 'keep', 'an install that remembers keep keeps it')
         assert.ok(/data-value="replace" role="radio" aria-checked="true" tabindex="0"/.test(remembered.state.dialogHtml[0]))
         assert.ok(/name="inThisNote" id="jotInThisNote" value="replace"/.test(remembered.state.dialogHtml[0]))
-        const after = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'after' } })
+        const after = await openSelectionWith('Pay rent', { settings: { selectionAction: 'after' } })
         assert.strictEqual(islandOf(after.state.dialogHtml[0]).data.inThisNote.value, 'after')
-        const richText = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'after' }, globalSettings: { 'editor.codeView': false } })
+        const richText = await openSelectionWith('Pay rent', { settings: { selectionAction: 'after' }, globalSettings: { 'editor.codeView': false } })
         const richHtml = richText.state.dialogHtml[0]
         assert.deepStrictEqual(islandOf(richHtml).data.inThisNote, { choices: ['replace', 'keep'], value: 'replace', fallback: 'replace' },
             'a remembered "after" falls back to the route\'s default, replace')
         assert.deepStrictEqual(choiceLabels(richHtml), ['Replace with link', 'Keep text'])
         assert.ok(!richHtml.includes('Add a link after it'), 'Add a link after it is not offered in the Rich Text editor')
-        const richReplace = await openSelectionWith('Pay rent', { settings: { lastSelectionAction: 'replace' }, globalSettings: { 'editor.codeView': false } })
+        const richReplace = await openSelectionWith('Pay rent', { settings: { selectionAction: 'replace' }, globalSettings: { 'editor.codeView': false } })
         assert.strictEqual(islandOf(richReplace.state.dialogHtml[0]).data.inThisNote.value, 'replace')
         const unreadable = await openSelectionWith('Pay rent', { globalValueThrows: true })
         assert.deepStrictEqual(islandOf(unreadable.state.dialogHtml[0]).data.inThisNote.choices, ['replace', 'keep'], 'an editor that cannot be told is treated as Rich Text')
@@ -1020,7 +1032,7 @@ async function main() {
         const forged = await openSelectionWith('Pay rent', {
             globalSettings: { 'editor.codeView': false }, dialogResults: [formResult('ok', { title: 'Pay rent', inThisNote: 'after' })],
         })
-        assert.deepStrictEqual(forged.state.timeline, ['execute selectedText', 'POST notes', 'execute insertText', 'setValue lastSelectionAction=replace'],
+        assert.deepStrictEqual(forged.state.timeline, ['execute selectedText', 'POST notes', 'execute insertText'],
             'an "after" the Rich Text form never offered is applied as the route\'s default, replace (insertText, never the HTML replaceSelection)')
     })
 
@@ -1030,7 +1042,7 @@ async function main() {
         })
         assert.deepStrictEqual(outcome, { id: outcome.id, opened: false })
         assert.deepStrictEqual(state.timeline, [
-            'execute selectedText', 'POST notes', 'execute insertText', 'setValue lastSelectionAction=replace',
+            'execute selectedText', 'POST notes', 'execute insertText',
             'POST tags/tWork/notes', 'POST tags', 'POST tags/tag0002/notes',
         ], 'the edit before the tags: a tag write can make Joplin select another note')
         assert.deepStrictEqual(state.executes[1], { name: 'insertText', args: [`[Call the \\[bank\\]](:/${outcome.id})`] }, 'the trimmed title, brackets escaped')
@@ -1048,7 +1060,7 @@ async function main() {
             dialogResults: [formResult('ok', { open: 'editor',  title: 'Rent', body: 'by Friday', tags: 'home', inThisNote: 'after' })],
         })
         assert.deepStrictEqual(several.state.timeline, [
-            'execute selectedText', 'POST notes', 'execute replaceSelection', 'setValue lastSelectionAction=after',
+            'execute selectedText', 'POST notes', 'execute replaceSelection',
             'POST tags', 'POST tags/tag0002/notes', 'execute openNote',
         ], 'Create and open: the edit reaches the note the selection came from before the tags and before the editor switches')
         assert.deepStrictEqual(several.state.executes[1].args, [`Pay rent\nby Friday\n[Rent](:/${several.outcome.id})`])
@@ -1058,28 +1070,30 @@ async function main() {
 
     await check('selection route, keep: no edit at all; Create and open opens the new note; replace with an empty Title links the title the empty-title rule gave', async () => {
         const keep = await openSelectionWith('Idea\nmore', { dialogResults: [formResult('ok', { open: 'editor',  title: 'Idea', body: 'more', inThisNote: 'keep' })] })
-        assert.deepStrictEqual(keep.state.timeline, ['execute selectedText', 'POST notes', 'setValue lastSelectionAction=keep', 'execute openNote'])
+        assert.deepStrictEqual(keep.state.timeline, ['execute selectedText', 'POST notes', 'execute openNote'])
         assert.deepStrictEqual(keep.outcome, { id: keep.outcome.id, opened: true })
         const missing = await openSelectionWith('Idea', { dialogResults: [formResult('ok', { title: 'Idea' })] })
-        assert.deepStrictEqual(missing.state.timeline, ['execute selectedText', 'POST notes', 'execute insertText', 'setValue lastSelectionAction=replace'],
+        assert.deepStrictEqual(missing.state.timeline, ['execute selectedText', 'POST notes', 'execute insertText'],
             'a result without the field is the route\'s default, replace')
         const emptied = await openSelectionWith('First\nrest', { dialogResults: [formResult('ok', { title: '  ', body: 'First line\nrest', inThisNote: 'replace' })] })
         assert.strictEqual(notePosts(emptied.state)[0].body.title, 'First line')
         assert.deepStrictEqual(emptied.state.executes[1].args, [`[First line](:/${emptied.outcome.id})`])
     })
 
-    await check('lastSelectionAction is written after a create on the selection route only: not on the plain route, not on Cancel, not when nothing is created', async () => {
+    await check('issue 5: In this note remembers nothing - no setting is written on any route; each open starts on the selectionAction / triggerAction setting', async () => {
         const plain = await openFormWith({ dialogResults: [formResult('ok', { title: 'Plain', inThisNote: 'replace' })] })
-        assert.deepStrictEqual(plain.state.settingWrites, [], 'the plain route remembers nothing')
+        assert.deepStrictEqual(plain.state.settingWrites, [], 'the plain route writes nothing')
         assert.deepStrictEqual(plain.state.executes, [READ_SELECTION], 'and makes no edit, whatever the result carries')
         assert.ok(!plain.state.dialogHtml[0].includes('jotInThisNote'), 'the plain form has no In this note row')
         assert.strictEqual(islandOf(plain.state.dialogHtml[0]).data.inThisNote, null)
-        const cancelled = await openSelectionWith('Idea', { dialogResults: [formResult('cancel', { title: 'Idea', inThisNote: 'replace' })] })
-        assert.deepStrictEqual(cancelled.state.settingWrites, [])
-        const nothing = await openSelectionWith('Idea', { dialogResults: [formResult('ok', { title: '', body: '', inThisNote: 'replace' })] })
-        assert.deepStrictEqual([nothing.state.dataPosts, nothing.state.settingWrites, nothing.outcome], [[], [], null])
         const created = await openSelectionWith('Idea', { dialogResults: [formResult('ok', { title: 'Idea', inThisNote: 'after' })] })
-        assert.deepStrictEqual(created.state.settingWrites, [{ key: 'lastSelectionAction', value: 'after' }])
+        assert.deepStrictEqual(created.state.settingWrites, [], 'Add a link after it chosen in the form is not remembered')
+        const trigger = await fireTriggerWith({ dialogResults: [formResult('ok', { title: 'T', inThisNote: 'remove' })] })
+        assert.deepStrictEqual(trigger.state.settingWrites, [])
+        const keep = await openSelectionWith('Idea', { settings: { selectionAction: 'keep' } })
+        assert.strictEqual(islandOf(keep.state.dialogHtml[0]).data.inThisNote.value, 'keep', 'the setting is where it starts')
+        const remove = await fireTriggerWith({ settings: { triggerAction: 'remove' } })
+        assert.strictEqual(islandOf(remove.state.dialogHtml[0]).data.inThisNote.value, 'remove')
     })
 
     await check('no selection: a throwing selectedText, a non-string, an empty or whitespace-only answer all open the plain form (no row, no editor read)', async () => {
@@ -1090,7 +1104,7 @@ async function main() {
         assert.strictEqual(thrown.state.warnings.length, 1)
         assert.ok(thrown.state.warnings[0].startsWith('Jot: could not read the editor\'s selection'), thrown.state.warnings[0])
         assert.deepStrictEqual(thrown.state.timeline, ['execute selectedText', 'POST notes'], 'the note is created, with no edit and no memory')
-        assert.ok(/name="title"[^>]*value=""/.test(thrown.state.dialogHtml[0]), 'nothing prefilled')
+        assert.strictEqual(fieldValue(thrown.state.dialogHtml[0], 'title'), '', 'nothing prefilled')
         for (const answer of [42, null, { text: 'x' }, '', '  \n\t ']) {
             const { state } = await openSelectionWith(answer)
             assert.ok(!state.dialogHtml[0].includes('jotInThisNoteRow'), `${JSON.stringify(answer)} is no selection`)
@@ -1102,9 +1116,9 @@ async function main() {
     await check('one chord serves both: jot.open and jot.button take the selection route when selectedText returns text; jot.fromSelection with none is the plain form', async () => {
         for (const command of ['jot.open', 'jot.button']) {
             const { state, outcome } = await openSelectionWith('Idea for later', {
-                settings: { lastSelectionAction: 'replace' }, dialogResults: [formResult('ok', { title: 'Idea for later', inThisNote: 'replace' })],
+                settings: { selectionAction: 'replace' }, dialogResults: [formResult('ok', { title: 'Idea for later', inThisNote: 'replace' })],
             }, command)
-            assert.ok(/name="title"[^>]*value="Idea for later"/.test(state.dialogHtml[0]), `${command} prefills the Title`)
+            assert.strictEqual(fieldValue(state.dialogHtml[0], 'title'), 'Idea for later', `${command} prefills the Title`)
             assert.ok(state.dialogHtml[0].includes('id="jotInThisNoteRow"'), `${command} shows In this note`)
             assert.deepStrictEqual(state.executes.slice(1), [{ name: 'insertText', args: [`[Idea for later](:/${outcome.id})`] }])
         }
@@ -1118,7 +1132,7 @@ async function main() {
             executeThrows: ['insertText'], dialogResults: [formResult('ok', { open: 'editor',  title: 'Idea', inThisNote: 'replace' })],
         })
         assert.deepStrictEqual(outcome, { id: outcome.id, opened: true })
-        assert.deepStrictEqual(state.timeline, ['execute selectedText', 'POST notes', 'execute insertText', 'setValue lastSelectionAction=replace', 'execute openNote'])
+        assert.deepStrictEqual(state.timeline, ['execute selectedText', 'POST notes', 'execute insertText', 'execute openNote'])
         assert.strictEqual(state.warnings.length, 1)
         assert.ok(state.warnings[0].startsWith('Jot: could not change the highlighted text (insertText)'), state.warnings[0])
         assert.deepStrictEqual(state.messageBoxes, [])
@@ -1151,7 +1165,7 @@ async function main() {
         })
         assert.deepStrictEqual(refused.outcome, { id: refused.outcome.id, opened: true }, 'the command resolves, it does not throw')
         assert.deepStrictEqual(refused.state.timeline, [
-            'execute selectedText', 'POST notes', 'execute insertText', 'setValue lastSelectionAction=replace',
+            'execute selectedText', 'POST notes', 'execute insertText',
             'POST tags', 'POST tags', 'POST tags/tag0002/notes', 'POST tags/tWork/notes', 'execute openNote',
         ])
         assert.deepStrictEqual(refused.state.warnings.filter(line => line.startsWith('Jot: could not add the tag "first"')).length, 1, refused.state.warnings.join(' | '))
@@ -1204,7 +1218,7 @@ async function main() {
         assert.deepStrictEqual(state.executes, [], 'no editor command at all: the selection is not read, nothing is edited from the plugin')
         assert.deepStrictEqual(state.globalReads, [], 'which editor is up is not asked: the content script only runs in the Markdown editor')
         const html = state.dialogHtml[0]
-        assert.ok(/<input type="text" name="title"[^>]*value=""/.test(html), 'no title prefill')
+        assert.strictEqual(fieldValue(html, 'title'), '', 'no title prefill')
         assert.ok(html.includes('>\n</textarea>'), 'no text prefill')
         assert.ok(html.includes('<strong id="jotHeading" class="jot-heading">New to-do</strong>'), 'the default type')
         assert.ok(/name="notebookId" id="jotNotebookId" value="fWork"/.test(html), 'the notebook of the note the editor holds')
@@ -1226,26 +1240,26 @@ async function main() {
         const { handler, state } = await triggerHandlerWith({ settings: { trigger: '@@' } })
         await handler({ type: 'trigger', from: 0, to: 2 })
         assert.deepStrictEqual(choiceLabels(state.dialogHtml[0]), ['Replace @@ with link', 'Remove @@'])
-        const kept = await fireTriggerWith({ settings: { lastTriggerAction: 'remove' } })
+        const kept = await fireTriggerWith({ settings: { triggerAction: 'remove' } })
         assert.deepStrictEqual(islandOf(kept.state.dialogHtml[0]).data.inThisNote, { choices: ['link', 'remove'], value: 'remove', fallback: 'link' }, 'an install that remembers remove keeps it')
         assert.ok(/data-value="remove" role="radio" aria-checked="true" tabindex="0"/.test(kept.state.dialogHtml[0]))
-        const remembered = await fireTriggerWith({ settings: { lastTriggerAction: 'link' } })
+        const remembered = await fireTriggerWith({ settings: { triggerAction: 'link' } })
         assert.deepStrictEqual(islandOf(remembered.state.dialogHtml[0]).data.inThisNote, { choices: ['link', 'remove'], value: 'link', fallback: 'link' })
         assert.ok(/data-value="link" role="radio" aria-checked="true" tabindex="0"/.test(remembered.state.dialogHtml[0]))
-        const bogus = await fireTriggerWith({ settings: { lastTriggerAction: 'keep' } })
+        const bogus = await fireTriggerWith({ settings: { triggerAction: 'keep' } })
         assert.strictEqual(islandOf(bogus.state.dialogHtml[0]).data.inThisNote.value, 'link', 'the selection route\'s keep is not a trigger choice: the default, link')
     })
 
     await check('trigger handler: Create with remove answers { action: \'remove\' }; with link { action: \'link\', link: [Title](:/id) } as the selection route builds it; the choice is remembered', async () => {
         const remove = await fireTriggerWith({ dialogResults: [formResult('ok', { title: 'Call the bank', tags: 'work', inThisNote: 'remove' })] })
         assert.deepStrictEqual(remove.answer, { action: 'remove' })
-        assert.deepStrictEqual(remove.state.timeline, ['POST notes', 'setValue lastTriggerAction=remove'], 'answered before the tags: the content script makes its edit first')
+        assert.deepStrictEqual(remove.state.timeline, ['POST notes'], 'answered before the tags: the content script makes its edit first')
         await tick(30)
-        assert.deepStrictEqual(remove.state.timeline, ['POST notes', 'setValue lastTriggerAction=remove', 'POST tags/tWork/notes'], 'then the tags; nothing opened, no editor command')
+        assert.deepStrictEqual(remove.state.timeline, ['POST notes', 'POST tags/tWork/notes'], 'then the tags; nothing opened, no editor command')
         assert.deepStrictEqual(notePosts(remove.state)[0].body, { parent_id: 'fProj', is_todo: 1, title: 'Call the bank', body: '', todo_due: 0 })
         const link = await fireTriggerWith({ dialogResults: [formResult('ok', { title: ' Call the [bank] ', inThisNote: 'link' })] })
         assert.deepStrictEqual(link.answer, { action: 'link', link: '[Call the \\[bank\\]](:/note0001)' }, 'the trimmed title, brackets escaped')
-        assert.deepStrictEqual(link.state.timeline, ['POST notes', 'setValue lastTriggerAction=link'])
+        assert.deepStrictEqual(link.state.timeline, ['POST notes'])
         assert.deepStrictEqual(link.state.executes, [])
         const emptied = await fireTriggerWith({ dialogResults: [formResult('ok', { title: '', body: 'First line\nrest', inThisNote: 'link' })] })
         assert.deepStrictEqual(emptied.answer, { action: 'link', link: '[First line](:/note0001)' }, 'the title the empty-title rule gave')
@@ -1276,7 +1290,7 @@ async function main() {
     await check('trigger handler: Create and open answers with open: id and opens nothing until the content script asks; the open message opens that note once, in the editor or a new window', async () => {
         const { state, handler, answer } = await fireTriggerWith({ dialogResults: [formResult('ok', { open: 'editor',  title: 'Open me', inThisNote: 'remove' })] })
         assert.deepStrictEqual(answer, { action: 'remove', open: 'note0001' })
-        assert.deepStrictEqual(state.timeline, ['POST notes', 'setValue lastTriggerAction=remove'], 'not opened yet: the edit must reach the note the trigger was typed in first')
+        assert.deepStrictEqual(state.timeline, ['POST notes'], 'not opened yet: the edit must reach the note the trigger was typed in first')
         assert.deepStrictEqual(await handler({ type: 'open', id: 'someOtherNote' }), { opened: false }, 'only the note the trigger form created')
         assert.deepStrictEqual(await handler({ type: 'open', id: 'note0001' }), { opened: true })
         assert.deepStrictEqual(state.executes, [{ name: 'openNote', args: ['note0001'] }])
@@ -1287,16 +1301,6 @@ async function main() {
         assert.deepStrictEqual(windowed.answer, { action: 'link', link: '[Window](:/note0001)', open: 'note0001' })
         await windowed.handler({ type: 'open', id: 'note0001' })
         assert.deepStrictEqual(windowed.state.executes, [{ name: 'openNoteInNewWindow', args: ['note0001'] }])
-    })
-
-    await check('lastTriggerAction is written after a create on the trigger route only; lastSelectionAction after one on the selection route only; the plain route writes neither', async () => {
-        const trigger = await fireTriggerWith({ dialogResults: [formResult('ok', { title: 'T', inThisNote: 'link' })] })
-        assert.deepStrictEqual(trigger.state.settingWrites, [{ key: 'lastTriggerAction', value: 'link' }])
-        const selection = await openSelectionWith('Idea', { dialogResults: [formResult('ok', { title: 'Idea', inThisNote: 'replace' })] })
-        assert.deepStrictEqual(selection.state.settingWrites, [{ key: 'lastSelectionAction', value: 'replace' }])
-        const plain = await openFormWith({ dialogResults: [formResult('ok', { title: 'Plain', inThisNote: 'link' })] })
-        assert.deepStrictEqual(plain.state.settingWrites, [])
-        assert.ok(!plain.state.dialogHtml[0].includes('jotInThisNoteRow'))
     })
 
     await check('trigger handler: one form at a time - a trigger while the form is up answers cancel at once, and a command while the trigger\'s form is up resolves null', async () => {
@@ -1336,9 +1340,9 @@ async function main() {
         const html = state.dialogHtml[0]
         assert.ok(html.includes('<strong id="jotHeading" class="jot-heading">Edit to-do</strong>'))
         assert.ok(/data-value="todo" role="radio" aria-checked="true"/.test(html), 'the note\'s type')
-        assert.ok(/<input type="text" name="title"[^>]*value="Call the bank"[^>]*autofocus/.test(html), 'the title, focused')
+        assert.ok(fieldValue(html, 'title') === 'Call the bank' && /<textarea name="title"[^>]*\bautofocus\b/.test(html), 'the title, focused')
         assert.ok(/<input type="text" id="jotNotebook"[^>]*value="Work"/.test(html) && /name="notebookId" id="jotNotebookId" value="fWork"/.test(html), 'the notebook')
-        assert.ok(/<input type="text" name="tags"[^>]*value="urgent, work"/.test(html), 'the tags, sorted, as the csv the field edits')
+        assert.strictEqual(fieldValue(html, 'tags'), 'urgent, work', 'the tags, sorted, as the csv the field edits')
         assert.ok(/name="dueDate" id="jotDueDate" value="2026-10-14"/.test(html) && /name="dueTime" id="jotDueTime" value="10:30"/.test(html), 'the due, local')
         assert.ok(html.includes('<span id="jotDueText" class="jot-due-text">2026-10-14 10:30</span>'))
         assert.ok(/id="alarmDate"[^>]*value="2026-10-14"/.test(html) && /id="alarmTime"[^>]*value="10:30"/.test(html), 'the picker\'s inputs too')
@@ -1481,7 +1485,7 @@ async function main() {
         assert.strictEqual(state.dialogOpens, 2)
         const again = state.dialogHtml[1]
         assert.ok(again.includes('>Edit to-do</strong>') && !again.includes('name="body"'), 'still edit mode')
-        assert.ok(/name="title"[^>]*value="Renamed"/.test(again) && /name="dueDate" id="jotDueDate" value="2026-02-31"/.test(again), 'as typed')
+        assert.ok(fieldValue(again, 'title') === 'Renamed' && /name="dueDate" id="jotDueDate" value="2026-02-31"/.test(again), 'as typed')
         assert.ok(/<div id="jotPicker" class="jot-picker">/.test(again) && islandOf(again).data.pickerOpen === true, 'the picker unfolded')
         assert.deepStrictEqual(state.dataPuts.map(put => put.body), [{ title: 'Renamed', todo_due: new Date(2026, 1, 28, 10, 30).getTime() }])
         assert.deepStrictEqual(outcome, { id: 'nEdit', changed: ['title', 'todo_due'] })
@@ -1494,7 +1498,7 @@ async function main() {
         const outcome = await withWarnings(state, () => open.execute({ mode: 'new', type: 'note', title: 'From Cockpit', body: 'line one\nline two', notebookId: 'fHome' }))
         const html = state.dialogHtml[0]
         assert.ok(html.includes('>New note</strong>') && /data-value="note" role="radio" aria-checked="true"/.test(html), 'type: the caller\'s note over the setting\'s to-do')
-        assert.ok(/<input type="text" name="title"[^>]*value="From Cockpit"/.test(html), 'title')
+        assert.strictEqual(fieldValue(html, 'title'), 'From Cockpit', 'title')
         assert.ok(html.includes('>\nline one\nline two</textarea>'), 'body, in the Text')
         assert.ok(/<input type="text" id="jotNotebook"[^>]*value="home"/.test(html) && islandOf(html).data.defaults.notebookId === 'fHome', 'notebookId, over the editor note\'s Work')
         assert.ok(!html.includes('jotInThisNoteRow'), 'no In this note row, though text is highlighted')
@@ -1512,7 +1516,7 @@ async function main() {
         await withWarnings(odd, () => odd.commands.find(item => item.name === 'jot.open').execute({ mode: 'new', type: 'Note', title: 42, body: { text: 'x' }, notebookId: 'gone' }))
         const oddHtml = odd.dialogHtml[0]
         assert.ok(oddHtml.includes('>New to-do</strong>'))
-        assert.ok(/<input type="text" name="title"[^>]*value=""/.test(oddHtml) && oddHtml.includes('>\n</textarea>'))
+        assert.ok(fieldValue(oddHtml, 'title') === '' && fieldValue(oddHtml, 'body') === '')
         assert.strictEqual(islandOf(oddHtml).data.defaults.notebookId, 'fWork', 'an unknown notebook falls back to the editor note\'s')
         assert.deepStrictEqual(odd.executes, [])
     })
@@ -1527,14 +1531,14 @@ async function main() {
         }
         const selected = await runBundle({ ...FORM_BASE, executeResults: { selectedText: 'Buy milk\nsemi-skimmed' } })
         await withWarnings(selected, () => selected.commands.find(item => item.name === 'jot.open').execute({ mode: 'unknown' }))
-        assert.ok(selected.dialogHtml[0].includes('jotInThisNoteRow') && /name="title"[^>]*value="Buy milk"/.test(selected.dialogHtml[0]), 'the selection route')
+        assert.ok(selected.dialogHtml[0].includes('jotInThisNoteRow') && fieldValue(selected.dialogHtml[0], 'title') === 'Buy milk', 'the selection route')
     })
 
     await check('jot.edit ("Edit with Jot…", in the note list\'s right-click menu on desktop) edits the first of the note ids it is given and ignores the rest; run with none (the palette), the editor\'s note; with no note, null', async () => {
         const notes = { nEdit: EDIT_NOTE, nOther: { ...EDIT_NOTE, id: 'nOther', title: 'Other' } }
         const { state, outcome } = await editWith({ notes, dialogResults: [editResult('ok', { title: 'Via the list' })] }, ['nEdit', 'nOther'], 'jot.edit')
         assert.deepStrictEqual(noteReads(state), ['notes/nEdit id,title,is_todo,parent_id,todo_due', 'notes/nEdit/tags id,title'])
-        assert.ok(state.dialogHtml[0].includes('>Edit to-do</strong>') && /name="title"[^>]*value="Call the bank"/.test(state.dialogHtml[0]))
+        assert.ok(state.dialogHtml[0].includes('>Edit to-do</strong>') && fieldValue(state.dialogHtml[0], 'title') === 'Call the bank')
         assert.deepStrictEqual(state.dataPuts, [{ path: ['notes', 'nEdit'], query: null, body: { title: 'Via the list' } }])
         assert.deepStrictEqual(outcome, { id: 'nEdit', changed: ['title'] })
         assert.deepStrictEqual([state.dialogCreates, state.executes], [['jot.edit'], []])
@@ -2075,14 +2079,15 @@ async function main() {
         for (const gone of ['alarmIsMulti', 'describeAlarmPlan', 'applyAlarmPlan', 'onAlarmModeChanged']) assert.ok(!glue.includes(gone), `${gone} is not ported`)
     })
 
-    await check('dialog glue: Enter in a text input with the Title empty is kept from Joplin (it would close the form with nothing created) and focuses the Title; an open suggestion list takes its Enter first', () => {
+    await check('dialog glue: Enter in a text input or in Title or Tags: with the Title empty it focuses the Title instead of closing the form; Title and Tags (textareas) submit through the form\'s submit event and never take a new line; an open suggestion list takes its Enter first', () => {
         const glue = read('src/form/formWebview.js')
         assert.ok(glue.includes("form.addEventListener('keydown', onJotFormKeyDown)"), 'on the form, in the bubble phase: after the input\'s own list handler, before Joplin\'s document listener')
-        const rule = glue.slice(glue.indexOf('function onJotFormKeyDown'), glue.indexOf('function focusJotTitle'))
+        const rule = glue.slice(glue.indexOf('function onJotFormKeyDown'), glue.indexOf('// The form\'s submit event'))
         assert.ok(rule.includes("if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return"), 'Enter only, never mid-composition')
-        assert.ok(rule.includes("if (!target || target.tagName !== 'INPUT') return"), 'text inputs only: a new line in the Text stays a new line')
-        assert.ok(rule.includes('if (!title || String(title.value).trim()) return'), 'a Title with text submits as before')
-        assert.ok(rule.includes('event.stopPropagation()') && rule.includes('event.preventDefault()') && rule.includes('title.focus()'))
+        assert.ok(rule.includes("if (target.tagName !== 'INPUT' && !grows) return"), 'one-line inputs and the growing fields; the Text keeps its new line')
+        assert.ok(rule.includes('if (!titleEmpty && !grows) return'), 'a one-line input with a title is Joplin\'s to submit')
+        assert.ok(rule.indexOf('event.preventDefault()') < rule.indexOf('submitJotForm()') && rule.includes('if (title) title.focus()'), 'no new line; an empty Title focused, else the form submitted')
+        assert.ok(glue.includes("function isJotGrow(element)") && glue.includes("element.classList.contains('jot-grow')"))
     })
 
     await check('dialog glue: Enter outside a text input (a calendar day, a time, a quick button or a segment just clicked, or nothing focused) submits the form through its submit event; the Title empty, it focuses the Title', () => {
@@ -2092,8 +2097,9 @@ async function main() {
         assert.ok(rule.includes("if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return"))
         assert.ok(rule.includes("if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return"), 'text inputs stay Joplin\'s, the Text keeps its new line')
         assert.ok(rule.includes('event.preventDefault()'), 'a focused button does not take Enter as a click')
-        assert.ok(rule.indexOf('title.focus()') < rule.indexOf('form.requestSubmit()'), 'the empty Title first')
-        assert.ok(rule.includes("form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))"), 'Joplin\'s document submit listener answers either way')
+        assert.ok(rule.indexOf('title.focus()') < rule.indexOf('submitJotForm()'), 'the empty Title first')
+        const submit = glue.slice(glue.indexOf('function submitJotForm'), glue.indexOf('function submitJotForm') + 400)
+        assert.ok(submit.includes('form.requestSubmit()') && submit.includes("form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))"), 'Joplin\'s document submit listener answers either way')
     })
 
     await check('mobile width: from the screen, never the viewport (100vw is the dialog\'s own width on mobile, and Joplin sizes the dialog to the content, so it shrank at every measurement); 94% of the screen, 240 to 440px', () => {
@@ -2377,7 +2383,7 @@ async function main() {
     // ---------------------------------------------------------------- 0.2: tags, back link, notebook, Open (issues 1 to 3)
     const OPEN_NOTE = { id: 'nOpen', title: 'Reading [list]', is_todo: 1, parent_id: 'fProj' }
     const OPEN_TAGS = { nOpen: [{ id: 'tWork', title: 'work' }, { id: 'tIdea', title: 'idea' }] }
-    const tagsValue = (html) => (/id="jotTags" class="jot-input" value="([^"]*)"/.exec(html) || [])[1]
+    const tagsValue = (html) => fieldValue(html, 'tags')
     const segValue = (html, id) => (new RegExp(`<input type="hidden" name="[a-zA-Z]+" id="${id}" value="([^"]*)">`).exec(html) || [])[1]
 
     await check('issue 1: the Tags start with the tags of the note you are in (setting on by default); off, nothing is read; the caller\'s route and no note read none', async () => {
@@ -2559,7 +2565,7 @@ async function main() {
             dialogResults: [formResult('ok', { title: 'Call the bank', tags: 'work', inThisNote: 'replace' })],
         })
         const order = state.timeline.filter(line => line !== 'execute editor.execCommand')
-        assert.deepStrictEqual(order, ['execute selectedText', 'POST notes', 'execute insertText', 'setValue lastSelectionAction=replace', 'POST tags/tWork/notes', 'execute openNote'])
+        assert.deepStrictEqual(order, ['execute selectedText', 'POST notes', 'execute insertText', 'POST tags/tWork/notes', 'execute openNote'])
         assert.deepStrictEqual(editor.opens, ['nRead'])
     })
 
@@ -2570,7 +2576,7 @@ async function main() {
         assert.ok(!state.timeline.includes('POST tags/tWork/notes'), 'no tag yet when the answer goes')
         await tick(60)
         const order = state.timeline.filter(line => line !== 'execute editor.execCommand')
-        assert.deepStrictEqual(order, ['POST notes', 'setValue lastTriggerAction=link', 'POST tags/tWork/notes', 'execute openNote'])
+        assert.deepStrictEqual(order, ['POST notes', 'POST tags/tWork/notes', 'execute openNote'])
         assert.deepStrictEqual(editor.opens, ['nRead'])
         assert.deepStrictEqual(editor.view(), HELD_VIEW)
         const opening = guardedEditor()

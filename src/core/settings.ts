@@ -1,8 +1,8 @@
 /** README ******************************************************************************************************************************************
- * Jot's settings, under Settings > Plugins > Jot: what the form starts with (the type, the notebook, the tags of the note you are in, the back     *
- * link, whether the new note opens), the typed trigger, the day start time and the toolbar button, and the hidden per-device memory of the In this  *
- * note choice on the selection route and on the trigger route (public: false, so never on the Settings screen; a plugin's settings are not synced,  *
- * so each device remembers its own). The notebook, tags and back link settings answer issues 3, 1 and 2.                                           *
+ * Jot's settings, under Settings > Plugins > Jot: what every part of the form starts with - the type, the notebook, the tags of the note you are  *
+ * in, the back link, whether the new note opens, the In this note choice for highlighted text and for the typed trigger - and the typed trigger, the *
+ * day start time and the toolbar button. Every selector in the form has its default here and remembers nothing between opens (issue 5: the In this  *
+ * note choice used to be remembered from the last create instead). The notebook, tags and back link settings answer issues 3, 1 and 2.             *
  *                                                                                                                                                  *
  * WHEN A CHANGED TRIGGER APPLIES. The Markdown editor's content script asks for the trigger when it loads, whenever the editor is given another note *
  * (or its text is replaced from outside, as a sync does) and after every fire (src/contentScript.ts). Settings is a screen of its own on both       *
@@ -32,9 +32,9 @@ export const BACKLINK_POSITION_KEY = "backlinkPosition"
 export const OPEN_AFTER_CREATE_KEY = "openAfterCreate"
 export const DAY_START_TIME_KEY = "dayStartTime"
 export const SHOW_TOOLBAR_BUTTON_KEY = "showToolbarButton"
-export const LAST_SELECTION_ACTION_KEY = "lastSelectionAction"
+export const SELECTION_ACTION_KEY = "selectionAction"
 export const TRIGGER_KEY = "trigger"
-export const LAST_TRIGGER_ACTION_KEY = "lastTriggerAction"
+export const TRIGGER_ACTION_KEY = "triggerAction"
 
 export const TYPE_TODO = "todo"
 export const TYPE_NOTE = "note"
@@ -48,12 +48,13 @@ export const BACKLINK_BOTTOM = "bottom"
 export const DEFAULT_BACKLINK_TEMPLATE = "Parent {note_type}: {note_link}"
 // The notebook setting's "The current notebook" value.
 export const CURRENT_NOTEBOOK = ""
-// The In this note choices (formModel's KEEP, REPLACE, AFTER); replace is the default until the user picks another (formModel.SELECTION_DEFAULT).
-// An install that already remembers another choice keeps it.
+// The In this note choices (formModel's KEEP, REPLACE, AFTER): the selectionAction setting's values, replace by default (formModel.SELECTION_DEFAULT).
 export const SELECTION_REPLACE = "replace"
-// The trigger route's choices (formModel's LINK, REMOVE); link is the default until the user picks another (formModel.TRIGGER_DEFAULT). An
-// install that already remembers another choice keeps it.
+export const SELECTION_KEEP = "keep"
+export const SELECTION_AFTER = "after"
+// The trigger route's choices (formModel's LINK, REMOVE): the triggerAction setting's values, link by default (formModel.TRIGGER_DEFAULT).
 export const TRIGGER_LINK = "link"
+export const TRIGGER_REMOVE = "remove"
 // The trigger's default (triggerRule's DEFAULT_TRIGGER).
 export const DEFAULT_TRIGGER = "++"
 
@@ -155,11 +156,38 @@ export async function setupSettings(){
             public: true,
             section: SECTION,
         },
+        [SELECTION_ACTION_KEY]: {
+            label: "In this note, for highlighted text",
+            description: "Where the form's In this note starts when Jot is opened from highlighted text. You can switch it in the form. Add a link after it is offered in the Markdown editor only; in the Rich Text editor the form starts on Replace instead.",
+            value: SELECTION_REPLACE,
+            type: SettingItemType.String,
+            isEnum: true,
+            options: {
+                [SELECTION_REPLACE]: "Replace it with a link to the new note",
+                [SELECTION_KEEP]: "Keep the text",
+                [SELECTION_AFTER]: "Add a link after it",
+            },
+            public: true,
+            section: SECTION,
+        },
         [TRIGGER_KEY]: {
             label: "Typed trigger",
             description: "Typing this at the start of a line or after a space opens Jot, in the Markdown editor on desktop and mobile. Leave empty to turn it off. A change applies as soon as you leave the settings.",
             value: DEFAULT_TRIGGER,
             type: SettingItemType.String,
+            public: true,
+            section: SECTION,
+        },
+        [TRIGGER_ACTION_KEY]: {
+            label: "In this note, for the typed trigger",
+            description: "Where the form's In this note starts when Jot is opened by the typed trigger. You can switch it in the form.",
+            value: TRIGGER_LINK,
+            type: SettingItemType.String,
+            isEnum: true,
+            options: {
+                [TRIGGER_LINK]: "Replace the trigger with a link to the new note",
+                [TRIGGER_REMOVE]: "Remove the trigger",
+            },
             public: true,
             section: SECTION,
         },
@@ -177,20 +205,6 @@ export async function setupSettings(){
             value: true,
             type: SettingItemType.Bool,
             public: true,
-            section: SECTION,
-        },
-        [LAST_SELECTION_ACTION_KEY]: {
-            label: "In this note, the choice made last time (selection)",
-            value: SELECTION_REPLACE,
-            type: SettingItemType.String,
-            public: false,
-            section: SECTION,
-        },
-        [LAST_TRIGGER_ACTION_KEY]: {
-            label: "In this note, the choice made last time (typed trigger)",
-            value: TRIGGER_LINK,
-            type: SettingItemType.String,
-            public: false,
             section: SECTION,
         },
     })
@@ -268,28 +282,27 @@ export async function isToolbarButtonEnabled(){
     return (await joplin.settings.value(SHOW_TOOLBAR_BUTTON_KEY)) !== false
 }
 
-/** getLastSelectionAction / setLastSelectionAction *************************************************************************************************
- * The In this note choice remembered from the last create on the selection route ("keep", "replace" or "after"), the form's default next time. The  *
- * read gives the raw value (formModel.selectionAction checks it against the buttons offered); both are guarded, since a memory that cannot be read  *
- * or written must never cost the user the note: the read falls back to replace, a failed write is a console warning.                                *
+/** getSelectionAction / getTriggerAction **********************************************************************************************************
+ * Where the form's In this note starts: on the selection route "replace", "keep" or "after", on the trigger route "link" or "remove" (the raw value;  *
+ * formModel.inThisNoteAction checks it against the buttons offered). Guarded: a setting that cannot be read is the route's default.               *
  ***************************************************************************************************************************************************/
-export async function getLastSelectionAction(){
+export async function getSelectionAction(): Promise<string> {
     try {
-        return String((await joplin.settings.value(LAST_SELECTION_ACTION_KEY)) || SELECTION_REPLACE)
+        return String((await joplin.settings.value(SELECTION_ACTION_KEY)) || SELECTION_REPLACE)
     } catch (error) {
-        console.warn("Jot: could not read the In this note choice made last time", error)
+        console.warn("Jot: could not read the In this note setting for highlighted text", error)
         return SELECTION_REPLACE
     }
 }
 
-export async function setLastSelectionAction(value: string){
+export async function getTriggerAction(): Promise<string> {
     try {
-        await joplin.settings.setValue(LAST_SELECTION_ACTION_KEY, value)
+        return String((await joplin.settings.value(TRIGGER_ACTION_KEY)) || TRIGGER_LINK)
     } catch (error) {
-        console.warn("Jot: could not remember the In this note choice", error)
+        console.warn("Jot: could not read the In this note setting for the typed trigger", error)
+        return TRIGGER_LINK
     }
 }
-
 
 /** getTrigger **************************************************************************************************************************************
  * The typed trigger as the content script uses it (triggerRule.normalizeTrigger: trimmed; "" turns the route off). A setting that cannot be read is *
@@ -301,26 +314,5 @@ export async function getTrigger(): Promise<string> {
     } catch (error) {
         console.warn("Jot: could not read the typed trigger, leaving it off", error)
         return ""
-    }
-}
-
-/** getLastTriggerAction / setLastTriggerAction *****************************************************************************************************
- * The In this note choice remembered from the last create on the trigger route ("remove" or "link"), the form's default next time; guarded as the    *
- * selection route's memory is.                                                                                                                    *
- ***************************************************************************************************************************************************/
-export async function getLastTriggerAction(){
-    try {
-        return String((await joplin.settings.value(LAST_TRIGGER_ACTION_KEY)) || TRIGGER_LINK)
-    } catch (error) {
-        console.warn("Jot: could not read the In this note choice made last time for the typed trigger", error)
-        return TRIGGER_LINK
-    }
-}
-
-export async function setLastTriggerAction(value: string){
-    try {
-        await joplin.settings.setValue(LAST_TRIGGER_ACTION_KEY, value)
-    } catch (error) {
-        console.warn("Jot: could not remember the In this note choice for the typed trigger", error)
     }
 }

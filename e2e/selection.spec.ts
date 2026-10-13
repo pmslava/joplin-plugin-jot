@@ -12,9 +12,8 @@ import { callPluginCommand, createNotebook, dataApi, dataApiSettings, selectedNo
  * when the form has been answered and the note written, so each case starts it, drives the dialog, then awaits it.
  * What the In this note choice did to the source note is read back through the data API once the editor has saved.
  *
- * The In this note default is the choice remembered from the last create in this profile, so `lastChoice` follows
- * it; it is reset in beforeAll, with the fresh profile (whose default is replace), so a retried case in a new worker
- * expects the right one.
+ * In this note starts on its setting on every open (issue 5: the choice is no longer remembered between creates), and
+ * this profile keeps the setting's default, so every case expects that default (`lastChoice`).
  */
 test.describe('The selection route (desktop, Markdown editor)', () => {
   let joplin: JoplinInstance;
@@ -24,7 +23,8 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
   const api = dataApi(API_PORT, API_TOKEN);
   const book = `Jot Selection ${stamp}`;
   let bookId = '';
-  let lastChoice = 'replace';
+  // In this note starts on its setting on every open (issue 5: nothing is remembered); this profile keeps the default.
+  const lastChoice = 'replace';
 
   test.beforeAll(async () => {
     joplin = await launchJoplin({ envDev: true, settings: dataApiSettings(API_PORT, API_TOKEN) });
@@ -35,7 +35,6 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
     const found = folders.items.find((folder: any) => folder.title === book);
     if (!found) throw new Error(`no notebook ${book}`);
     bookId = found.id;
-    lastChoice = 'replace';
   });
 
   test.afterAll(async () => {
@@ -138,7 +137,6 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
 
     const outcome = await pending;
     expect(outcome && outcome.opened).toBe(false);
-    lastChoice = 'replace';
     const link = `[${title}](:/${outcome.id})`;
     await expect.poll(async () => noteBody(sourceId), { timeout: 30_000 }).toBe(link);
     expect((await noteBody(sourceId)).split('\n')[0]).toBe(link);
@@ -166,7 +164,6 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
 
     const outcome = await pending;
     expect(outcome && outcome.opened).toBe(false);
-    lastChoice = 'after';
     const expected = `${title} [${title}](:/${outcome.id})\nby Friday`;
     await expect.poll(async () => noteBody(sourceId), { timeout: 30_000 }).toBe(expected);
     expect(await selectedNoteId(win)).toBe(sourceId);
@@ -191,7 +188,6 @@ test.describe('The selection route (desktop, Markdown editor)', () => {
 
     const outcome = await pending;
     expect(outcome && outcome.opened).toBe(true);
-    lastChoice = 'keep';
     await expect.poll(async () => selectedNoteId(win), { timeout: 20_000 }).toBe(outcome.id);
     await expect.poll(async () => win.locator('input.title-input').inputValue(), { timeout: 20_000 }).toBe(title);
     await expect.poll(async () => editorText(win), { timeout: 20_000 }).toBe('for later');

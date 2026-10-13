@@ -313,6 +313,7 @@ function pickJotSuggest(index, leaving){
     } else {
         var picked = model().applyTagPick(current.input.value, current.token, row)
         current.input.value = picked.value
+        sizeJotGrow(current.input)
         if (!leaving) current.input.setSelectionRange(picked.caret, picked.caret)
     }
 }
@@ -743,12 +744,28 @@ function jotMobileWidth(){
 function onJotFormKeyDown(event){
     if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return
     var target = event.target
-    if (!target || target.tagName !== 'INPUT') return
+    if (!target) return
+    var grows = isJotGrow(target)
+    if (target.tagName !== 'INPUT' && !grows) return
     var title = jotById('jotTitle')
-    if (!title || String(title.value).trim()) return
+    var titleEmpty = !title || !String(title.value).trim()
+    // A one-line input with a title: Joplin's own listener submits. Title and Tags are textareas, which Joplin leaves alone, so they submit here.
+    if (!titleEmpty && !grows) return
     event.stopPropagation()
     event.preventDefault()
-    title.focus()
+    if (titleEmpty){
+        if (title) title.focus()
+        return
+    }
+    submitJotForm()
+}
+
+// The form's submit event, which Joplin's own submit listener answers with Create (or Save).
+function submitJotForm(){
+    var form = jotForm()
+    if (!form) return
+    if (typeof form.requestSubmit === 'function') form.requestSubmit()
+    else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
 }
 
 /** Enter anywhere else ***************************************************************************************************************************
@@ -771,8 +788,79 @@ function onJotWindowKeyDown(event){
         title.focus()
         return
     }
-    if (typeof form.requestSubmit === 'function') form.requestSubmit()
-    else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    submitJotForm()
+}
+
+/** Title and Tags: growing fields ******************************************************************************************************************
+ * Issue 4: a long title or a long list of tags (the note you are in can bring a dozen) was hidden past the field's edge. Title and Tags are         *
+ * textareas of one row that grow with what they hold, to three lines; past three they scroll, and the scrollbar says there is more. sizeJotGrow      *
+ * measures the content at the one-line height and sets the height, capped; the dialog grows with it (Joplin measures it live), as it does when the *
+ * picker unfolds - and nothing here depends on the dialog's own size, so it cannot feed back (the Android width loop of 0.2.0). A tag list open      *
+ * under Tags follows it.                                                                                                                            *
+ *                                                                                                                                                  *
+ * They stay one-line fields in every other way: Enter never makes a new line (onJotFormKeyDown), a pasted line break becomes a space (a title or a  *
+ * tag has none; the browser hands a textarea's value over with \n only, so the swap keeps the caret where it was), and the keyboard puts the caret   *
+ * at the end - Tab into the field, as into an email's recipients, ready to add to it, where a one-line input would have selected everything (the    *
+ * first keystroke then replaced every tag of the note you are in). A click leaves the caret where it lands.                                         *
+ ***************************************************************************************************************************************************/
+var JOT_GROW_LINES = 3
+
+function isJotGrow(element){
+    return !!(element && element.tagName === 'TEXTAREA' && element.classList && element.classList.contains('jot-grow'))
+}
+
+function sizeJotGrow(field){
+    if (!field || !field.style || typeof window.getComputedStyle !== 'function') return
+    var style = window.getComputedStyle(field)
+    var borders = (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0)
+    var padding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0)
+    var line = parseFloat(style.lineHeight) || 18
+    var floor = Math.ceil(line + padding + borders)
+    var cap = Math.ceil(line * JOT_GROW_LINES + padding + borders)
+    // At the one-line height first, so scrollHeight measures the content rather than the height it had.
+    field.style.height = floor + 'px'
+    var wanted = field.scrollHeight + borders
+    field.style.height = Math.max(floor, Math.min(cap, wanted)) + 'px'
+    field.style.overflowY = wanted > cap + 1 ? 'auto' : 'hidden'
+    if (jotSuggest && jotSuggest.input === field) placeJotSuggest(field, jotSuggest.list)
+}
+
+function sizeJotGrowAll(){
+    var form = jotForm()
+    if (!form) return
+    var fields = form.querySelectorAll('textarea.jot-grow')
+    for (var index = 0; index < fields.length; index++) sizeJotGrow(fields[index])
+}
+
+function onJotGrowInput(event){
+    var field = event.currentTarget
+    if (field.value.indexOf('\n') >= 0){
+        var start = field.selectionStart, end = field.selectionEnd
+        field.value = field.value.replace(/\n/g, ' ')
+        try { field.setSelectionRange(start, end) } catch (error){}
+    }
+    sizeJotGrow(field)
+}
+
+// A press puts the caret where it lands: the flag lives only through the press's own task, in which the focus event fires.
+function onJotGrowPointerDown(event){
+    var field = event.currentTarget
+    field.jotPointerFocus = true
+    setTimeout(function(){ field.jotPointerFocus = false }, 0)
+}
+
+function onJotGrowFocus(event){
+    var field = event.currentTarget
+    if (field.jotPointerFocus) return
+    jotCaretToEnd(field)
+    // Again once the focus has settled, in case the browser selected the field's text after this handler.
+    setTimeout(function(){ if (document.activeElement === field && !field.jotPointerFocus) jotCaretToEnd(field) }, 0)
+}
+
+function jotCaretToEnd(field){
+    var end = field.value.length
+    try { field.setSelectionRange(end, end) } catch (error){}
+    field.scrollTop = field.scrollHeight
 }
 
 /** focusJotTitle **********************************************************************************************************************************
@@ -829,6 +917,13 @@ function initJotFormIfNeeded(){
     notebook.addEventListener('blur', onJotNotebookBlur)
     jotById('jotNotebookOpen').addEventListener('mousedown', onJotNotebookOpenMouseDown)
 
+    var growing = form.querySelectorAll('textarea.jot-grow')
+    for (var grow = 0; grow < growing.length; grow++){
+        growing[grow].addEventListener('input', onJotGrowInput)
+        growing[grow].addEventListener('pointerdown', onJotGrowPointerDown)
+        growing[grow].addEventListener('focus', onJotGrowFocus)
+    }
+
     var tags = jotById('jotTags')
     tags.addEventListener('input', onJotTagsInput)
     tags.addEventListener('keydown', onJotSuggestKeyDown)
@@ -851,6 +946,7 @@ function initJotFormIfNeeded(){
     form.addEventListener('keydown', onJotFormKeyDown)
 
     setJotType(jotById('jotType').value)
+    sizeJotGrowAll()
     writeJotDue(due.date, due.time)
     renderAlarmCalendar()
     if (!jotById('jotPicker').hasAttribute('hidden')) setJotPickerOpen(true)
@@ -859,6 +955,7 @@ function initJotFormIfNeeded(){
 
 window.addEventListener('focus', onJotWindowFocus)
 window.addEventListener('keydown', onJotWindowKeyDown)
+window.addEventListener('resize', sizeJotGrowAll)
 new MutationObserver(initJotFormIfNeeded).observe(document.documentElement, { childList: true, subtree: true })
 if (document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', initJotFormIfNeeded)

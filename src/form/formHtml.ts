@@ -19,6 +19,10 @@
  * choices, value, fallback }, null on the plain routes), so the markup and the island never disagree. Notebook and Tags stay text fields with their *
  * suggestion lists, and Due stays last, so unfolding its picker pushes nothing down.                                                              *
  *                                                                                                                                                  *
+ * TITLE AND TAGS are textareas of one row (.jot-grow) only so they can wrap: formWebview.js grows them to three lines and then lets them scroll       *
+ * (issue 4), keeps Enter from ever making a new line in them, and turns a pasted line break into a space. Their content starts with a newline, as  *
+ * the Text's does, because the HTML parser drops one there.                                                                                         *
+ *                                                                                                                                                  *
  * EDIT MODE (view.mode "edit", brief 4.5) is the same form for an existing note: the heading says Edit to-do or Edit note, and there is no Text    *
  * and no In this note row, so Type, Title, Notebook, Tags and Due remain. The island carries the mode, so the script's heading follows the Type    *
  * toggle in the edit wording.                                                                                                                      *
@@ -183,9 +187,9 @@ export function buildFormHtml(view: FormView): string {
             <div class="jot-head">
                 <strong id="jotHeading" class="jot-heading">${escapeHtml(FormModel.headingFor(type, mode))}</strong>${hint}
             </div>${typeRow}
-            <div class="jot-row">
+            <div class="jot-row jot-row-top">
                 <label class="jot-label" for="jotTitle">Title</label>
-                <input type="text" name="title" id="jotTitle" class="jot-input" value="${escapeHtml(values.title)}" autocomplete="off" autofocus>
+                <textarea name="title" id="jotTitle" class="jot-input jot-grow" rows="1" autocomplete="off" autofocus>\n${escapeHtml(values.title)}</textarea>
             </div>${textRow}
             <div class="jot-row">
                 <label class="jot-label" for="jotNotebook">Notebook</label>
@@ -196,10 +200,10 @@ export function buildFormHtml(view: FormView): string {
                 </div>
                 <input type="hidden" name="notebookId" id="jotNotebookId" value="${escapeHtml(values.notebookId)}">
             </div>
-            <div class="jot-row">
+            <div class="jot-row jot-row-top">
                 <label class="jot-label" for="jotTags">Tags</label>
-                <input type="text" name="tags" id="jotTags" class="jot-input" value="${escapeHtml(values.tags)}" ${textInput} spellcheck="false"
-                    placeholder="Comma separated" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="jotTagList">
+                <textarea name="tags" id="jotTags" class="jot-input jot-grow" rows="1" ${textInput} spellcheck="false" placeholder="Comma separated"
+                    role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="jotTagList">\n${escapeHtml(values.tags)}</textarea>
             </div>${inThisNoteRow}${backlinkRow}${openRow}
             <div class="jot-row jot-due-row" id="jotDueRow">
                 <span class="jot-label">Due</span>

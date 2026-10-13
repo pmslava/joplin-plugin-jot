@@ -150,11 +150,20 @@
     color: var(--jot-accent);
     opacity: 1;
 }
-textarea.jot-input {
+#jotBody {
     /* Three lines, fixed: a draggable resize handle would make the centred dialog jump as it grows. */
     height: 66px;
     padding-top: 5px;
     resize: none;
+}
+/* Title and Tags grow with what they hold: one line, then two, then three, and past three they scroll, the scrollbar
+ * saying there is more (issue 4). formWebview.js sets the height (sizeJotGrow); this is their one-line start, before the
+ * script has run. They are textareas only so they can wrap: Enter never makes a new line in them. */
+textarea.jot-grow {
+    height: var(--jot-control);
+    resize: none;
+    overflow-y: hidden;
+    overflow-wrap: anywhere;
 }
 
 /* The selectors - Type, In this note, Back link, Open: one line of segments that act as radios. A group takes the width

@@ -33,11 +33,13 @@ In Joplin, Settings › Plugins › search for Jot and install it. Or download `
 Type, Title, Text, Notebook, Tags, then the choices, and Due last. The title is focused when the form opens, so typing a title and pressing Enter is all a capture needs; Enter creates from anywhere in the form except the Text, where it is a new line, so a date picked with the mouse is followed by Enter as well; with the title still empty, Enter keeps the form open and puts the cursor back in the title. Every choice is one line of buttons you click or move through with the arrow keys:
 
 - **Type**: To-do or Note.
-- **In this note**, when the form was opened from highlighted text: Replace with link (the default), Keep text, or Add link after. Opened by `++`: Replace `++` with link (the default) or Remove `++`. Jot remembers your last choice for each.
+- **In this note**, when the form was opened from highlighted text: Replace with link (the default), Keep text, or Add link after. Opened by `++`: Replace `++` with link (the default) or Remove `++`. Each starts on its setting.
 - **Back link**: Add puts a line linking to the note you are in at the top of the new note, then an empty line, then the text (or at the bottom, by setting). Hover Add to see the line. It starts on the setting, Don't add unless you change it.
 - **Open**: No (stay where you are, the default), In editor, or New window. It starts on the setting.
 
 **Notebook** starts on the notebook of the note you are in, or on the notebook the setting names, such as an inbox. **Tags** start with the tags of the note you are in, followed by a comma and a space, so you can clear what does not fit or type the next tag straight away. Both filter a list as you type, and Enter picks the highlighted row.
+
+**Title** and **Tags** grow with what they hold, up to three lines; past that they scroll, and the scrollbar shows there is more. Tab into either puts the cursor at the end, ready to add to it; a click puts it where you click. Enter in them never starts a new line, and a pasted line break becomes a space.
 
 **Due** shows the date and time beside a bell. The bell unfolds Cockpit's date picker, the calendar, the time columns and the quick buttons, and every pick writes into the row at once. A to-do whose date is picked before its time starts at the day start time.
 
@@ -56,6 +58,8 @@ Settings › Plugins › Jot:
 - **Back link text**: `Parent {note_type}: {note_link}` by default. The placeholders are Copy Note ID's, for the note you are in: `{note_link}`, `{note_title}`, `{note_id}`, `{note_type}` (to-do or note), `{notebook_name}`, `{notebook_path}` (such as `Work/Projects`) and `{notebook_id}`. So `Extracted from: {note_link}` works too.
 - **Back link position**: the first line, above the text (default), or the last line, below it.
 - **Open the new note**: No, In the editor, or In a new window; the form's Open starts here.
+- **In this note, for highlighted text**: Replace it with a link to the new note (default), Keep the text, or Add a link after it.
+- **In this note, for the typed trigger**: Replace the trigger with a link to the new note (default), or Remove the trigger.
 - **Typed trigger**, **Day start time**, and **Show the Jot button in the note toolbar** (after a restart, since Joplin cannot add or remove a toolbar button while running).
 
 ## Known limits

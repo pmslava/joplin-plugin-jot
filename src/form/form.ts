@@ -19,12 +19,12 @@
  * one, opens the form on the 'selection' route, prefilled from it (formModel.splitSelection), with the In this note row; with none, the route it    *
  * was given, the plain form. After a create on that route the choice is applied to the editor while it surely holds the note the selection came   *
  * from - right after POST notes, BEFORE the tags (writing a tag can make Joplin select another note, see below) and before anything is opened       *
- * (Create and open would switch the editor to the new note, and the edit would land there) - and remembered in lastSelectionAction for next time.   *
+ * (Create and open would switch the editor to the new note, and the edit would land there). The row starts on the selectionAction setting.        *
  *                                                                                                                                                  *
  * THE TRIGGER ROUTE. openTriggerForm(trigger) is what the typed trigger's message runs (src/trigger.ts): the plain form with no prefill, plus the In *
- * this note row with Replace ++ with a link to the new note and Remove ++ (the trigger printed), starting on lastTriggerAction. The edit is not      *
+ * this note row with Replace ++ with a link to the new note and Remove ++ (the trigger printed), starting on the triggerAction setting. The edit is not      *
  * made here: the content script makes it in the editor, as one transaction, once it has the answer this resolves ({ action: 'remove' }, { action:  *
- * 'link', link } or { action: 'cancel' }), and the choice is remembered after the create. Create and open therefore does not open at once - the     *
+ * 'link', link } or { action: 'cancel' }). With Open on, the note is therefore not opened at once - the                                           *
  * editor would switch to the new note before the content script's edit reached the note the trigger was typed in - but puts the new note's id in    *
  * the answer (open); the content script makes its edit and then asks for the open (openTriggerNote), which opens that one id only, once. The tags   *
  * wait too: they are written after the answer has gone (writeTriggerTags, GUARD_TIMING.triggerEditMs later), so a selection Joplin moves while they  *
@@ -52,8 +52,8 @@
 import joplin from "api"
 import { buildFormHtml, FormNotebook, FormValues } from "./formHtml"
 import {
-    getBacklinkSettings, getCopyTags, getDayStartTime, getDefaultNotebookId, getDefaultType, getLastSelectionAction, getLastTriggerAction,
-    getOpenAfterCreate, OPEN_IN_WINDOW, registerNotebookChoices, setLastSelectionAction, setLastTriggerAction,
+    getBacklinkSettings, getCopyTags, getDayStartTime, getDefaultNotebookId, getDefaultType, getOpenAfterCreate, getSelectionAction, getTriggerAction,
+    OPEN_IN_WINDOW, registerNotebookChoices,
 } from "../core/settings"
 import { isMobile } from "../core/platform"
 import { applySelectionEdit, editorIsMarkdown, readSelectedText } from "./editorSelection"
@@ -281,21 +281,21 @@ async function withFormOpen<T>(work: () => Promise<T>): Promise<T | null> {
 }
 
 /** inThisNoteFor ***********************************************************************************************************************************
- * The In this note row of one open. The selection route: Replace, Keep (and Add after in the Markdown editor), starting on lastSelectionAction,    *
- * else on Replace. The trigger route: Replace with a link and Remove, labelled with the trigger, starting on lastTriggerAction, else on the link.   *
+ * The In this note row of one open. The selection route: Replace, Keep (and Add after in the Markdown editor), starting on the selectionAction     *
+ * setting, else on Replace. The trigger route: Replace with a link and Remove, labelled with the trigger, starting on triggerAction, else the link.  *
  * Every other route: no row, and nothing is read.                                                                                                  *
  ***************************************************************************************************************************************************/
 async function inThisNoteFor(route: string, presets: FormPresets): Promise<InThisNote> {
     if (route === SELECTION_ROUTE && typeof presets.selection === "string"){
         const choices: string[] = FormModel.selectionChoices(await editorIsMarkdown())
         const fallback: string = FormModel.SELECTION_DEFAULT
-        const value = FormModel.inThisNoteAction(await getLastSelectionAction(), choices, fallback)
+        const value = FormModel.inThisNoteAction(await getSelectionAction(), choices, fallback)
         return { choices, labels: FormModel.SELECTION_SHORT_LABELS, titles: FormModel.SELECTION_LABELS, value, fallback, selection: presets.selection, trigger: null }
     }
     if (route === TRIGGER_ROUTE && typeof presets.trigger === "string"){
         const choices: string[] = FormModel.triggerChoices()
         const fallback: string = FormModel.TRIGGER_DEFAULT
-        const value = FormModel.inThisNoteAction(await getLastTriggerAction(), choices, fallback)
+        const value = FormModel.inThisNoteAction(await getTriggerAction(), choices, fallback)
         return {
             choices, labels: FormModel.triggerShortLabels(presets.trigger), titles: FormModel.triggerLabels(presets.trigger), value, fallback,
             selection: null, trigger: presets.trigger,
@@ -435,7 +435,7 @@ async function selectedFolder(): Promise<any> {
  * Executes a 'create' plan: POST notes with the payload formModel built, then the In this note choice, then the tags, and last the open when the  *
  * plan asks for one. The selection route makes its edit first (the link to the new note under its final title), while the editor surely holds the *
  * note the form was opened from: the tags can make Joplin select another note (the selection guard gives it back, but an edit made in between would *
- * land in the wrong note), and opening switches the editor for good. The trigger route only remembers the choice: its edit is the content script's,  *
+ * land in the wrong note), and opening switches the editor for good. The trigger route makes no edit here: its edit is the content script's,         *
  * made from the answer, so its tags (laterTags) and, on Create and open, the open wait for the content script too (writeTriggerTags, openLater).     *
  ***************************************************************************************************************************************************/
 async function createNote(plan: any, row: InThisNote): Promise<Created> {
@@ -443,9 +443,7 @@ async function createNote(plan: any, row: InThisNote): Promise<Created> {
     const link: string = FormModel.noteLink(plan.note.title, note.id)
     if (plan.inThisNote && row.selection !== null){
         await applySelectionEdit(FormModel.selectionEdit(plan.inThisNote, row.selection, link))
-        await setLastSelectionAction(plan.inThisNote)
     }
-    if (plan.inThisNote && row.trigger !== null) await setLastTriggerAction(plan.inThisNote)
     const openTarget: string = plan.open || ""
     const openLater = !!openTarget && row.trigger !== null
     const laterTags: string[] = row.trigger !== null ? plan.tags : []
