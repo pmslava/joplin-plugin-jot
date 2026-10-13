@@ -86,12 +86,11 @@
     var BACKLINK_BOTTOM = 'bottom'
     var DEFAULT_BACKLINK_TEMPLATE = 'Parent {note_type}: {note_link}'
 
-    // When the tags and the back link apply, and what the notebook setting applies to (issue 6). A note from text in a note is one Jot was opened
-    // for from highlighted text or by the typed trigger; a quick note is one opened with nothing highlighted (the shortcut, the menu, the toolbar).
+    // When the tags and the back link apply (issue 6). A note from text in a note is one Jot was opened for from highlighted text or by the typed
+    // trigger; a quick note is one opened with nothing highlighted (the shortcut, the menu, the toolbar). Each has a notebook setting of its own.
     var FOR_NEVER = 'never'
     var FOR_TEXT = 'text'
     var FOR_ALWAYS = 'always'
-    var NOTEBOOK_FOR_ALL = 'all'
 
     function text(value){ return value == null ? '' : String(value) }
     function pad2(value){ return String(value).padStart(2, '0') }
@@ -196,18 +195,12 @@
         }).trim()
     }
 
-    /** appliesFor / notebookSettingApplies **********************************************************************************************************
-     * Issue 6. appliesFor: whether a "never / for notes from text in a note / always" setting (the tags, the back link) is on for this open -        *
-     * always, or for text when the form was opened from highlighted text or by the typed trigger. notebookSettingApplies: whether the notebook       *
-     * setting decides where the form starts - for every note when its scope is all, otherwise for quick notes only (a note from text then starts    *
-     * in its own note's notebook).                                                                                                                  *
+    /** appliesFor ***********************************************************************************************************************************
+     * Issue 6: whether a "never / for notes from text in a note / always" setting (the tags, the back link) is on for this open - always, or for     *
+     * text when the form was opened from highlighted text or by the typed trigger.                                                                  *
      ***************************************************************************************************************************************************/
     function appliesFor(setting, fromText){
         return setting === FOR_ALWAYS || (setting === FOR_TEXT && !!fromText)
-    }
-
-    function notebookSettingApplies(scope, fromText){
-        return scope === NOTEBOOK_FOR_ALL || !fromText
     }
 
     /** composeBody *************************************************************************************************************************************
@@ -835,7 +828,6 @@
         FOR_TEXT: FOR_TEXT,
         FOR_ALWAYS: FOR_ALWAYS,
         appliesFor: appliesFor,
-        notebookSettingApplies: notebookSettingApplies,
         openChoices: openChoices,
         openChoice: openChoice,
         backlinkText: backlinkText,

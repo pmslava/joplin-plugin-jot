@@ -39,7 +39,7 @@ Type, Title, Text, Notebook, Tags, then the choices, and Due last. The title is 
 
 Jot tells two kinds of note apart. A **quick note** is one you start with nothing highlighted, from the shortcut, the menu or the toolbar button: a reminder to deal with later. A **note from text in a note** is one you start from highlighted text or by typing `++`: it belongs with the note it came from. By default:
 
-- **Notebook** starts on the notebook setting for a quick note, such as an inbox, and on the notebook of the note you are in for a note from text.
+- **Notebook** starts on the notebook setting for that kind of note: by default the notebook of the note you are in, for both. Set the one for quick notes to an inbox, say, and reminders land there while notes from text stay next to their source.
 - **Tags** stay empty for a quick note. For a note from text they start with the tags of the note you are in, followed by a comma and a space, so you can clear what does not fit or type the next tag straight away.
 - **Back link** starts on Don't add, for every note, until you choose otherwise in Settings.
 
@@ -58,8 +58,8 @@ Each of these is a setting, so a quick note can be just the shortcut, a title an
 Settings › Plugins › Jot:
 
 - **What Jot creates**: a to-do or a note.
-- **Notebook**: The current notebook (the one of the note you are in), or any notebook, such as an inbox. Notebooks made later appear in the list once Jot has been used.
-- **Use the Notebook setting for**: Quick notes only (default), so a note from text starts in its note's notebook, or All notes.
+- **Notebook for quick notes**: The current notebook (the one of the note you are in, the default), or any notebook, such as an inbox. Notebooks made later appear in the list once Jot has been used.
+- **Notebook for notes from text in a note**: The current notebook (the default), or any notebook.
 - **Fill in the tags of the note you are in**: Never, For notes from text in a note (default), or Always.
 - **Add a back link to the note you are in**: Never (default), For notes from text in a note, or Always; the form's Back link starts here.
 - **Back link text**: `Parent {note_type}: {note_link}` by default. The placeholders are Copy Note ID's, for the note you are in: `{note_link}`, `{note_title}`, `{note_id}`, `{note_type}` (to-do or note), `{notebook_name}`, `{notebook_path}` (such as `Work/Projects`) and `{notebook_id}`. So `Extracted from: {note_link}` works too.

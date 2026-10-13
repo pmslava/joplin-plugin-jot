@@ -662,10 +662,10 @@ async function main() {
     })
 
     // ---------------------------------------------------------------- settings and the toolbar gate
-    await check('settings: section Jot with exactly defaultType, defaultNotebook, defaultNotebookFor, tagsFrom, backlinkFor, backlinkTemplate, backlinkPosition, openAfterCreate, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton on screen, and 0.2.0\'s copyTags and backlink hidden', () => {
+    await check('settings: section Jot with exactly defaultType, defaultNotebook, textNotebook, tagsFrom, backlinkFor, backlinkTemplate, backlinkPosition, openAfterCreate, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton on screen, and 0.2.0\'s copyTags and backlink hidden', () => {
         assert.deepStrictEqual(desktop.sections.map(section => [section.name, section.spec.label]), [['jot', 'Jot']])
         const specs = desktop.settingSpecs
-        assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'defaultNotebook', 'defaultNotebookFor', 'tagsFrom', 'backlinkFor', 'backlinkTemplate', 'backlinkPosition',
+        assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'defaultNotebook', 'textNotebook', 'tagsFrom', 'backlinkFor', 'backlinkTemplate', 'backlinkPosition',
             'openAfterCreate', 'selectionAction', 'trigger', 'triggerAction', 'dayStartTime', 'showToolbarButton', 'copyTags', 'backlink'],
             'every selector has its default on screen (issue 5); the 0.2.0 switches hidden, kept for the carry-over (issue 6)')
         const hidden = ['copyTags', 'backlink']
@@ -689,15 +689,15 @@ async function main() {
             { label: 'What Jot creates', description: 'Whether the form opens as a to-do or a note. You can switch in the form.', value: 'todo', type: STRING, isEnum: true, options: { todo: 'A to-do', note: 'A note' } })
         const pick = (spec) => ({ label: spec.label, description: spec.description, value: spec.value, type: spec.type, isEnum: spec.isEnum, options: spec.options })
         assert.deepStrictEqual(pick(specs.defaultNotebook), {
-            label: 'Notebook',
-            description: 'Where Jot creates a note unless you pick another in the form: the notebook of the note you are in, or always the same notebook, such as an inbox. Notebooks made later appear here once Jot has been used.',
+            label: 'Notebook for quick notes',
+            description: 'Where a note starts when you open Jot with nothing highlighted (the shortcut, the menu, the toolbar button): the notebook of the note you are in, or always the same notebook, such as an inbox. You can pick another in the form. Notebooks made later appear here once Jot has been used.',
             value: '', type: STRING, isEnum: true, options: { '': 'The current notebook' },
-        }, 'the current notebook by default; the startup fixture has no notebooks to list')
-        assert.deepStrictEqual(pick(specs.defaultNotebookFor), {
-            label: 'Use the Notebook setting for',
-            description: 'Quick notes are the ones Jot opens with nothing highlighted: the shortcut, the menu, the toolbar button. With Quick notes only, a note from text in a note (highlighted text or the typed trigger) starts in that note\'s notebook.',
-            value: 'quick', type: STRING, isEnum: true, options: { quick: 'Quick notes only', all: 'All notes' },
-        }, 'issue 6: quick notes only by default (issue 3 asked for the toolbar button and the shortcut)')
+        }, 'the current notebook by default, under its 0.2.0 key so a chosen inbox is kept; the startup fixture has no notebooks to list')
+        assert.deepStrictEqual(pick(specs.textNotebook), {
+            label: 'Notebook for notes from text in a note',
+            description: 'Where a note starts when you open Jot from highlighted text or by typing the trigger: the notebook of the note the text is in, or always the same notebook. You can pick another in the form.',
+            value: '', type: STRING, isEnum: true, options: { '': 'The current notebook' },
+        }, 'issue 6: a setting of its own, said in its own label')
         assert.deepStrictEqual(pick(specs.tagsFrom), {
             label: 'Fill in the tags of the note you are in',
             description: 'For notes from text in a note: when Jot is opened from highlighted text or by the typed trigger, the form\'s Tags start with the tags of that note. Always: whenever you are in a note. You can change or clear them in the form.',
@@ -2414,7 +2414,7 @@ async function main() {
         assert.deepStrictEqual([tagsValue(caller.dialogHtml[0]), noteReads(caller)], ['', []], 'another plugin\'s form has no note you are in')
     })
 
-    await check('issue 6: the Back link starts on Add for notes from text with "For notes from text in a note" and on Don\'t add for a quick note; the notebook setting is for quick notes only by default, so a note from text starts in its note\'s notebook', async () => {
+    await check('issue 6: the Back link starts on Add for notes from text with "For notes from text in a note" and on Don\'t add for a quick note; each kind has its own notebook setting, the current notebook by default', async () => {
         const text = await openSelectionWith('Idea', { selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never', backlinkFor: 'text' } })
         assert.strictEqual(segValue(text.state.dialogHtml[0], 'jotBacklink'), 'add')
         const quick = await openFormWith({ selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never', backlinkFor: 'text' } })
@@ -2422,14 +2422,15 @@ async function main() {
         const quickInbox = await openFormWith({ selectedNote: OPEN_NOTE, settings: { defaultNotebook: 'fArch' } })
         assert.strictEqual(islandOf(quickInbox.state.dialogHtml[0]).data.defaults.notebookId, 'fArch', 'a quick note: the inbox')
         const textHome = await openSelectionWith('Idea', { selectedNote: OPEN_NOTE, settings: { defaultNotebook: 'fArch' } })
-        assert.strictEqual(islandOf(textHome.state.dialogHtml[0]).data.defaults.notebookId, 'fProj', 'from text: the note\'s own notebook')
+        assert.strictEqual(islandOf(textHome.state.dialogHtml[0]).data.defaults.notebookId, 'fProj', 'from text: its own setting, the current notebook by default')
         const triggerHome = await fireTriggerWith({ selectedNote: OPEN_NOTE, settings: { defaultNotebook: 'fArch' } })
         assert.strictEqual(islandOf(triggerHome.state.dialogHtml[0]).data.defaults.notebookId, 'fProj', 'by the typed trigger: the same')
-        const all = await openSelectionWith('Idea', { selectedNote: OPEN_NOTE, settings: { defaultNotebook: 'fArch', defaultNotebookFor: 'all' } })
-        assert.strictEqual(islandOf(all.state.dialogHtml[0]).data.defaults.notebookId, 'fArch', 'All notes: the inbox for everything')
+        const textFixed = await openSelectionWith('Idea', { selectedNote: OPEN_NOTE, settings: { defaultNotebook: 'fArch', textNotebook: 'fHome' } })
+        assert.strictEqual(islandOf(textFixed.state.dialogHtml[0]).data.defaults.notebookId, 'fHome', 'Notebook for notes from text in a note, when it names one')
+        const quickStill = await openFormWith({ selectedNote: OPEN_NOTE, settings: { defaultNotebook: 'fArch', textNotebook: 'fHome' } })
+        assert.strictEqual(islandOf(quickStill.state.dialogHtml[0]).data.defaults.notebookId, 'fArch', 'and a quick note still the quick notes\' one')
         assert.deepStrictEqual([FormModel.appliesFor('text', true), FormModel.appliesFor('text', false), FormModel.appliesFor('always', false), FormModel.appliesFor('never', true), FormModel.appliesFor('x', true)],
             [true, false, true, false, false])
-        assert.deepStrictEqual([FormModel.notebookSettingApplies('quick', false), FormModel.notebookSettingApplies('quick', true), FormModel.notebookSettingApplies('all', true)], [true, false, true])
     })
 
     await check('issue 6: 0.2.0\'s choices carry over once - tags switched off becomes Never, a back link switched on becomes Always, each old switch then back at its default; an install that never touched them writes nothing', async () => {
@@ -2495,11 +2496,12 @@ async function main() {
     await check('issue 3: the notebook setting is a dropdown of the notebooks that exist, registered at startup and again only when the list changes', async () => {
         const state = await runBundle({ ...FORM_BASE })
         await tick(5)
-        const registrations = () => state.settingRegistrations.filter(keys => keys.length === 1 && keys[0] === 'defaultNotebook').length
+        const registrations = () => state.settingRegistrations.filter(keys => JSON.stringify(keys) === JSON.stringify(['defaultNotebook', 'textNotebook'])).length
         assert.strictEqual(registrations(), 1, 'at startup, from the notebooks read then')
         assert.deepStrictEqual(state.settingSpecs.defaultNotebook.options, {
             '': 'The current notebook', fOdd: '</script><b>odd', fArch: 'Archive', fHome: 'home', fWork: 'Work', fProj: 'Work / Projects',
         }, 'the current notebook first, then every notebook by path')
+        assert.deepStrictEqual(state.settingSpecs.textNotebook.options, state.settingSpecs.defaultNotebook.options, 'the same list for notes from text')
         const command = state.commands.find(item => item.name === 'jot.open')
         await withWarnings(state, () => command.execute())
         await tick(5)

@@ -10,7 +10,7 @@
  * platforms: opening it takes the editor down and leaving it builds a new one, which asks again - so a change applies as soon as the settings are   *
  * left (seen in the e2e app on desktop; mobile is expected to do the same, as its note screen is rebuilt, and is unchecked).                       *
  *                                                                                                                                                  *
- * THE NOTEBOOK SETTING is a dropdown of the notebooks that exist: "The current notebook" (the note you are in, the default) and every notebook by    *
+ * THE NOTEBOOK SETTINGS (quick notes; notes from text in a note) are dropdowns of the notebooks that exist: "The current notebook" (the note you are *
  * its path, stored by id. A plugin's options are fixed when it registers a setting, but Joplin (3.7.21, Setting.registerSetting) lets it register   *
  * the same key again - the new options replace the old and the stored value is kept - so the list is registered at startup and again whenever the    *
  * form reads a notebook list that differs (registerNotebookChoices). A stored notebook that no longer exists falls back to the current one.          *
@@ -28,7 +28,8 @@ export const DEFAULT_TYPE_KEY = "defaultType"
 export const DEFAULT_NOTEBOOK_KEY = "defaultNotebook"
 export const TAGS_FROM_KEY = "tagsFrom"
 export const BACKLINK_FOR_KEY = "backlinkFor"
-export const DEFAULT_NOTEBOOK_FOR_KEY = "defaultNotebookFor"
+// The notebook for notes from text in a note (issue 6); defaultNotebook is the one for quick notes, under its 0.2.0 key so a chosen inbox is kept.
+export const TEXT_NOTEBOOK_KEY = "textNotebook"
 // 0.2.0's two switches, kept hidden only so migrateSettings can carry a choice made in them over to tagsFrom and backlinkFor.
 export const OLD_COPY_TAGS_KEY = "copyTags"
 export const OLD_BACKLINK_KEY = "backlink"
@@ -57,9 +58,6 @@ export const CURRENT_NOTEBOOK = ""
 export const FOR_NEVER = "never"
 export const FOR_TEXT = "text"
 export const FOR_ALWAYS = "always"
-// What the notebook setting applies to: quick notes only (the shortcut, the menu, the toolbar button with nothing highlighted), or all notes.
-export const NOTEBOOK_FOR_QUICK = "quick"
-export const NOTEBOOK_FOR_ALL = "all"
 // The In this note choices (formModel's KEEP, REPLACE, AFTER): the selectionAction setting's values, replace by default (formModel.SELECTION_DEFAULT).
 export const SELECTION_REPLACE = "replace"
 export const SELECTION_KEEP = "keep"
@@ -72,21 +70,22 @@ export const DEFAULT_TRIGGER = "++"
 
 const TriggerRule = require("../form/triggerRule")
 
-/** notebookSettingSpec *****************************************************************************************************************************
- * The notebook setting, with its options: "The current notebook" first, then every notebook by path ({ id, path }, sorted, as the form shows them).  *
+/** notebookSettingSpecs ****************************************************************************************************************************
+ * The two notebook settings (issue 6), with the same options: "The current notebook" first, then every notebook by path ({ id, path }, sorted, as   *
+ * the form shows them). One for quick notes - Jot opened with nothing highlighted - and one for notes from text in a note - highlighted text or the *
+ * typed trigger; each says so in its own label, so no setting depends on another.                                                                  *
  ***************************************************************************************************************************************************/
-function notebookSettingSpec(notebooks: { id: string, path: string }[]){
+function notebookSettingSpecs(notebooks: { id: string, path: string }[]){
     const options: { [id: string]: string } = { [CURRENT_NOTEBOOK]: "The current notebook" }
     for (const notebook of notebooks) options[notebook.id] = notebook.path
+    const spec = (label: string, description: string) => ({
+        label, description, value: CURRENT_NOTEBOOK, type: SettingItemType.String, isEnum: true, options: { ...options }, public: true, section: SECTION,
+    })
     return {
-        label: "Notebook",
-        description: "Where Jot creates a note unless you pick another in the form: the notebook of the note you are in, or always the same notebook, such as an inbox. Notebooks made later appear here once Jot has been used.",
-        value: CURRENT_NOTEBOOK,
-        type: SettingItemType.String,
-        isEnum: true,
-        options,
-        public: true,
-        section: SECTION,
+        [DEFAULT_NOTEBOOK_KEY]: spec("Notebook for quick notes",
+            "Where a note starts when you open Jot with nothing highlighted (the shortcut, the menu, the toolbar button): the notebook of the note you are in, or always the same notebook, such as an inbox. You can pick another in the form. Notebooks made later appear here once Jot has been used."),
+        [TEXT_NOTEBOOK_KEY]: spec("Notebook for notes from text in a note",
+            "Where a note starts when you open Jot from highlighted text or by typing the trigger: the notebook of the note the text is in, or always the same notebook. You can pick another in the form."),
     }
 }
 
@@ -116,20 +115,7 @@ export async function setupSettings(){
             public: true,
             section: SECTION,
         },
-        [DEFAULT_NOTEBOOK_KEY]: notebookSettingSpec([]),
-        [DEFAULT_NOTEBOOK_FOR_KEY]: {
-            label: "Use the Notebook setting for",
-            description: "Quick notes are the ones Jot opens with nothing highlighted: the shortcut, the menu, the toolbar button. With Quick notes only, a note from text in a note (highlighted text or the typed trigger) starts in that note's notebook.",
-            value: NOTEBOOK_FOR_QUICK,
-            type: SettingItemType.String,
-            isEnum: true,
-            options: {
-                [NOTEBOOK_FOR_QUICK]: "Quick notes only",
-                [NOTEBOOK_FOR_ALL]: "All notes",
-            },
-            public: true,
-            section: SECTION,
-        },
+        ...notebookSettingSpecs([]),
         [TAGS_FROM_KEY]: {
             label: "Fill in the tags of the note you are in",
             description: "For notes from text in a note: when Jot is opened from highlighted text or by the typed trigger, the form's Tags start with the tags of that note. Always: whenever you are in a note. You can change or clear them in the form.",
@@ -299,21 +285,21 @@ export async function getOpenAfterCreate(){
 }
 
 /** getDefaultNotebookId ****************************************************************************************************************************
- * The notebook the setting names, or "" for the current notebook (also when it cannot be read).                                                   *
+ * The notebook the setting for this kind of note names - quick notes, or notes from text in a note when `fromText` - or "" for the current notebook *
+ * (also when it cannot be read).                                                                                                                   *
  ***************************************************************************************************************************************************/
-export async function getDefaultNotebookId(): Promise<string> {
+export async function getDefaultNotebookId(fromText = false): Promise<string> {
     try {
-        return String((await joplin.settings.value(DEFAULT_NOTEBOOK_KEY)) || "")
+        return String((await joplin.settings.value(fromText ? TEXT_NOTEBOOK_KEY : DEFAULT_NOTEBOOK_KEY)) || "")
     } catch (error) {
         console.warn("Jot: could not read the notebook setting, using the current notebook", error)
         return CURRENT_NOTEBOOK
     }
 }
 
-/** getTagsFrom / getBacklinkSettings / getDefaultNotebookFor **************************************************************************************
- * When the Tags start with the current note's tags ("never", "text" or "always"; anything else is "text", the default); the back link's: when it    *
- * starts on Add ("never" unless "text" or "always"), its text (the default when empty) and position (top unless bottom); and what the notebook      *
- * setting applies to ("quick" unless "all").                                                                                                       *
+/** getTagsFrom / getBacklinkSettings ***************************************************************************************************************
+ * When the Tags start with the current note's tags ("never", "text" or "always"; anything else is "text", the default); and the back link's: when   *
+ * it starts on Add ("never" unless "text" or "always"), its text (the default when empty) and position (top unless bottom).                        *
  ***************************************************************************************************************************************************/
 function forValue(value: unknown, fallback: string): string {
     return value === FOR_NEVER || value === FOR_TEXT || value === FOR_ALWAYS ? value : fallback
@@ -321,10 +307,6 @@ function forValue(value: unknown, fallback: string): string {
 
 export async function getTagsFrom(): Promise<string> {
     return forValue(await joplin.settings.value(TAGS_FROM_KEY), FOR_TEXT)
-}
-
-export async function getDefaultNotebookFor(): Promise<string> {
-    return (await joplin.settings.value(DEFAULT_NOTEBOOK_FOR_KEY)) === NOTEBOOK_FOR_ALL ? NOTEBOOK_FOR_ALL : NOTEBOOK_FOR_QUICK
 }
 
 export async function getBacklinkSettings(): Promise<{ for: string, template: string, position: string }> {
@@ -335,14 +317,14 @@ export async function getBacklinkSettings(): Promise<{ for: string, template: st
 }
 
 /** registerNotebookChoices *************************************************************************************************************************
- * Registers the notebook setting again with `notebooks` ({ id, path }, sorted) as its options, when they differ from the list registered last. The   *
+ * Registers the two notebook settings again with `notebooks` ({ id, path }, sorted) as their options, when they differ from the list registered last. *
  * stored value is kept (see the README). Never throws: a refusal is a console warning, and the setting keeps its last options.                     *
  ***************************************************************************************************************************************************/
 export async function registerNotebookChoices(notebooks: { id: string, path: string }[]): Promise<void> {
     const signature = JSON.stringify(notebooks.map(notebook => [notebook.id, notebook.path]))
     if (signature === registeredNotebooks) return
     try {
-        await joplin.settings.registerSettings({ [DEFAULT_NOTEBOOK_KEY]: notebookSettingSpec(notebooks) })
+        await joplin.settings.registerSettings(notebookSettingSpecs(notebooks))
         registeredNotebooks = signature
     } catch (error) {
         console.warn("Jot: could not update the notebook list in Settings", error)

@@ -142,22 +142,26 @@ test.describe('The 0.2 requests (desktop)', () => {
     expect(note.body).toBe(`Parent note: [${reading}](:/${readingId})\n\nThe details.`);
   });
 
-  test('issue 3: the notebook setting lists the notebooks; with the inbox chosen there the form starts on it and Create puts the note there', async () => {
+  test('issues 3 and 6: both notebook settings list the notebooks; with the inbox as the quick notes\' notebook a quick note starts there, a note from text in its own notebook', async () => {
     const { win } = joplin;
     const opened = await activateJoplinMenuItem(win, /^(Options|Preferences\.\.\.)$/);
     expect(opened).toBe(true);
     const screen = win.locator('.config-screen');
     await screen.waitFor({ state: 'visible', timeout: 60_000 });
     await screen.getByRole('tab', { name: 'Jot', exact: true }).first().click();
-    const field = win.getByLabel('Notebook', { exact: true }).first();
+    const field = win.getByLabel('Notebook for quick notes', { exact: true }).first();
     await field.waitFor({ state: 'visible', timeout: 30_000 });
     await expect(field.locator('option')).toContainText(['The current notebook', inbox, book]);
     await field.selectOption({ label: inbox });
+    const textField = win.getByLabel('Notebook for notes from text in a note', { exact: true }).first();
+    await expect(textField).toHaveValue('');
+    await expect(textField.locator('option')).toContainText(['The current notebook', inbox, book]);
     await screen.locator('.button-bar button', { hasText: 'OK' }).first().click();
     await expect.poll(async () => screen.isVisible().catch(() => false), { timeout: 30_000 }).toBe(false);
     await expect.poll(async () => selectedNoteId(win).catch(() => ''), { timeout: 20_000 }).toBe(readingId);
 
-    // Issue 6: the inbox is for quick notes only by default; a note from highlighted text starts in its own note's notebook.
+    // Issue 6: the inbox is the quick notes' notebook; a note from highlighted text has its own setting, the current notebook, so it starts in its
+    // own note's notebook.
     await callPluginCommand(win, 'editor.execCommand', { name: 'select', args: [0, 9] });
     await expect.poll(async () => callPluginCommand(win, 'selectedText'), { timeout: 10_000 }).toBe('What I am');
     const fromText = callPluginCommand(win, 'jot.fromSelection');
