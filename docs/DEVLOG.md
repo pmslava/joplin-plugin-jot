@@ -50,7 +50,7 @@ Harness 127 (26 checks retargeted for the textareas and the settings, two memory
 
 The Type selector reads Note, To-do, the order of Cockpit's New note and New to-do buttons, and so does the What Jot creates setting; the default stays To-do. Harness 130.
 
-## 2026-10-14 — unreleased: quicker to open
+## 2026-10-14 — v0.2.3: quicker to open, and the form appears in one piece
 
 Slava timed the Jot button on Android at 3 to 4 seconds before the form appeared. On a phone every call from the plugin to Joplin is a round trip, and the open made many: the selection read, about ten settings reads, every notebook and every tag 100 a page, and on the first open the dialog's build (create, five scripts, the buttons). Now the settings come in one call (`joplin.settings.values`, read in the 3.7.21 bundle; declared in `api/JoplinSettings.d.ts`, whose typings predate it; an app without it reads them one by one), the notebook and tag lists come from a cache read at startup, after every form and after every sync (a notebook the form must start on that the cache lacks, or a cache with no notebook at all, makes the form read first - the e2e suite caught the second: a profile whose first notebook was made after startup was told there was none), and the create form's dialog is built in the background once the plugin has started. A test build shows the timings in the form's heading (`src/core/timing.ts`, `SHOW_OPEN_TIMINGS`, never committed on) to find what the phone still spends. Harness 134, e2e 37.
 

@@ -7,7 +7,7 @@
 		"desktop",
 		"mobile"
 	],
-	"version": "0.2.2",
+	"version": "0.2.3",
 	"name": "Jot",
 	"description": "Quick capture of a note or to-do without leaving the one you are in. A small form for the title, a line or two of text, the notebook, tags and the due date, opened by a shortcut, from highlighted text, or by typing ++ in the editor. The note is created where you say, and you stay where you were.",
 	"author": "pmslava",
