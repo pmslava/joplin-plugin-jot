@@ -92,6 +92,10 @@ npm run dist
 
 `npm test` runs the harness; `npm run test:e2e` runs the Playwright suite over an isolated Joplin AppImage under xvfb. The plugin file is `publish/io.github.pmslava.jot.jpl`.
 
+## Support
+
+If this plugin is useful to you, support the work: [GitHub Sponsors](https://github.com/sponsors/pmslava) for monthly or one-time sponsorship, or [Ko-fi](https://ko-fi.com/pmslava) for a one-off tip by PayPal or card without an account. All options: [pmslava.com/support](https://pmslava.com/support/).
+
 ## Credits
 
 The idea of a note from highlighted text comes from Convert Text To New Note by ambrt. The capture use case comes from xiaofeng's request in the Cockpit forum thread. The date picker is Cockpit's. MIT.

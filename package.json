@@ -7,6 +7,10 @@
     "type": "git",
     "url": "git+https://github.com/pmslava/joplin-plugin-jot.git"
   },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/pmslava"
+  },
   "publishConfig": {
     "access": "public"
   },
