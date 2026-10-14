@@ -103,6 +103,20 @@ test.describe('The first paint (desktop)', () => {
     console.log(`[jot-e2e] markup only: ${JSON.stringify(markupOnly)}`);
     expect(markupOnly).toEqual({ form: scripted.form, title: scripted.title, tags: scripted.tags, scripts: 0 });
 
+    // Shown once Joplin has sized the dialog (formWebview.js showJotForm; on desktop the class changes nothing), and on mobile transparent until then.
+    expect(await form.evaluate(() => document.getElementById('jotForm')!.classList.contains('-shown'))).toBe(true);
+    const opacities = await form.evaluate(() => {
+      const element = document.getElementById('jotForm')!;
+      element.classList.add('-mobile');
+      element.classList.remove('-shown');
+      const waiting = getComputedStyle(element).opacity;
+      element.classList.add('-shown');
+      const shown = getComputedStyle(element).opacity;
+      element.classList.remove('-mobile');
+      return [waiting, shown];
+    });
+    expect(opacities).toEqual(['0', '1']);
+
     await win.locator('.user-webview-dialog button', { hasText: /^Cancel$/ }).last().click();
     expect(await pending).toBeNull();
   });

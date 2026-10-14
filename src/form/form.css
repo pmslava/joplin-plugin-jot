@@ -63,6 +63,19 @@
 .jot-form.-mobile {
     font-size: var(--joplin-font-size, 16px);
 }
+/* Mobile: transparent until Joplin has sized the dialog to the form (formWebview.js, showJotForm, adds -shown). Joplin
+ * shows the page at once in a dialog that is still at its largest and nearly transparent, and the webview does not fade
+ * with it, so the form floated over the note with no background for up to a second. Transparent, not hidden: the layout
+ * stays for Joplin to measure, and autofocus still works. Shown after 6 s regardless, should the script never run. */
+.jot-form.-mobile:not(.-shown) {
+    opacity: 0;
+    animation: jot-show 0s 6s forwards;
+}
+@keyframes jot-show {
+    to {
+        opacity: 1;
+    }
+}
 .jot-head {
     display: flex;
     flex-direction: row;
@@ -79,8 +92,8 @@
     letter-spacing: 0.01em;
 }
 .jot-timing {
-    /* A test build's line (core/timing.ts): two lines kept for it from the start, so filling it moves nothing. */
-    height: calc(2 * 1.35em);
+    /* A test build's line (core/timing.ts): three lines kept for it from the start, so filling it moves nothing. */
+    height: calc(3 * 1.35em);
     overflow: hidden;
     font-size: 0.82em;
     opacity: 0.7;

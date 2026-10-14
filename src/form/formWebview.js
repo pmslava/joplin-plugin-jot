@@ -22,6 +22,11 @@
 // When this script began to run: each open is a fresh webview (mobile 3.7.8, and desktop 3.7.21 mounts a new frame per open too), so this is when
 // the dialog's page was ready for it (the timing line's "webview" part).
 var jotScriptStart = Date.now()
+// The page's width when this script began: Joplin's dialog before it has sized itself to the form (showJotForm). And when the form's setup ended and
+// when it was shown, for a test build's timing line.
+var jotStartWidth = window.innerWidth
+var jotSetupAt = 0
+var jotShownAt = 0
 
 /** State of the current open **********************************************************************************************************************/
 // The island of the current open: { mode: 'create' | 'edit', notebooks: [{id, path}], tags: [title], defaults: { type, notebookId, dayStart },
@@ -873,16 +878,46 @@ function showJotTiming(){
     var line = jotById('jotTiming')
     var timing = jotData.timing
     if (!line || !timing) return
-    var now = Date.now()
     var seconds = function(ms){ return (Math.max(0, ms) / 1000).toFixed(2) }
     var parts = (timing.parts || []).map(function(part){ return part[0] + ' ' + seconds(part[1]) })
-    // The dialog showing itself, in two: the webview starting and loading the scripts (setHtml to this script's first line), and the form's own setup.
+    // The dialog showing itself, in three: the webview starting and loading the scripts (setHtml to this script's first line), the form's own setup,
+    // and Joplin sizing the dialog to the form (the form is shown then: showJotForm).
     var scriptAt = Math.max(jotScriptStart, timing.htmlAt)
+    var setupAt = jotSetupAt || Date.now()
     parts.push('webview ' + seconds(scriptAt - timing.htmlAt))
-    parts.push('setup ' + seconds(now - scriptAt))
+    parts.push('setup ' + seconds(setupAt - scriptAt))
+    if (jotShownAt) parts.push('sized ' + seconds(jotShownAt - setupAt))
     var pageScreen = window.screen && window.screen.width
     parts.push('screen ' + (timing.screen || '?') + '/' + (pageScreen || '?'))
-    line.textContent = 'Opened in ' + seconds(now - timing.start) + ' s: ' + parts.join(', ')
+    line.textContent = (jotShownAt ? 'Shown in ' : 'Ready in ') + seconds((jotShownAt || setupAt) - timing.start) + ' s: ' + parts.join(', ')
+}
+
+/** showJotForm ***********************************************************************************************************************************
+ * Joplin mobile shows the dialog's page as soon as it has loaded, in a dialog still at its largest and nearly transparent (opacity 0.1 until its    *
+ * first measurement comes back, PluginDialogWebView.tsx; the webview does not fade with it), so for up to a second the form floated over the note  *
+ * with no background, at the top of the screen, then jumped into its centred, opaque dialog (Slava's Pixel, 2026-10-14). So on mobile the form     *
+ * starts transparent (form.css: .jot-form.-mobile without -shown), its layout kept for Joplin to measure, and is shown here once Joplin has sized   *
+ * the dialog to it: the page is then as wide and as tall as the form (or shorter, a form taller than the screen), or its width has changed at all  *
+ * (a keyboard changes only the height). Checked when the form is set up and at every resize. form.css shows it after 6 s regardless, should this   *
+ * script never run. Desktop gets the class too, and no style hangs on it there.                                                                   *
+ ***************************************************************************************************************************************************/
+function jotDialogSized(){
+    var wrapper = jotById('joplin-plugin-content')
+    if (!wrapper || typeof wrapper.getBoundingClientRect !== 'function') return true
+    var box = wrapper.getBoundingClientRect()
+    if (Math.abs(window.innerWidth - jotStartWidth) > 1) return true
+    var wide = Math.abs(window.innerWidth - box.width) <= 1.5
+    var tall = Math.abs(window.innerHeight - box.height) <= 1.5 || box.height > window.innerHeight + 1.5
+    return wide && tall
+}
+
+function showJotForm(){
+    var form = jotForm()
+    if (!form || form.getAttribute('data-jot-ready') !== '1' || form.classList.contains('-shown')) return
+    if (!jotDialogSized()) return
+    form.classList.add('-shown')
+    jotShownAt = Date.now()
+    showJotTiming()
 }
 
 /** focusJotTitle **********************************************************************************************************************************
@@ -993,12 +1028,16 @@ function initJotFormIfNeeded(){
     renderAlarmCalendar()
     if (!jotById('jotPicker').hasAttribute('hidden')) setJotPickerOpen(true)
     focusJotTitleAtStart()
+    jotSetupAt = Date.now()
+    jotShownAt = 0
     showJotTiming()
+    showJotForm()
 }
 
 window.addEventListener('focus', onJotWindowFocus)
 window.addEventListener('keydown', onJotWindowKeyDown)
 window.addEventListener('resize', sizeJotGrowAll)
+window.addEventListener('resize', showJotForm)
 new MutationObserver(initJotFormIfNeeded).observe(document.documentElement, { childList: true, subtree: true })
 if (document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', initJotFormIfNeeded)

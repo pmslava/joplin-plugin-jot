@@ -2205,7 +2205,7 @@ async function main() {
         const css = read('src/form/form.css').replace(/\/\*[\s\S]*?\*\//g, '')
         assert.ok(!/\d\s*v(w|h|min|max)\b/.test(css), 'no viewport unit anywhere in the form\'s CSS')
         const glue = read('src/form/formWebview.js')
-        assert.ok(!/jotMobileWidth|jot-mobile|wrapper\.style|joplin-plugin-content/.test(glue), 'the script sets no width and adds no layout class')
+        assert.ok(!/jotMobileWidth|jot-mobile|wrapper\.style|wrapper\.classList/.test(glue), 'the script sets no width and adds no layout class')
         const widthFor = async (screen) => {
             if (screen === undefined) delete global.screen
             else global.screen = screen
@@ -2853,7 +2853,7 @@ async function main() {
         assert.ok(!style.includes('/*') && !style.includes('</') && !/\n/.test(style), 'no comment, nothing that could close the element, one line')
         assert.ok(style.length < source.length, 'whitespace collapsed')
         for (const rule of ['#joplin-plugin-content{width: 440px}', '--jot-control: max(28px,calc(1.35em + 10px))', '.jot-form.-mobile{font-size: var(--joplin-font-size,16px)}',
-            '@supports (field-sizing: content){textarea.jot-grow{field-sizing: content;flex-basis: 0;height: auto;', '.jot-timing{height: calc(2 * 1.35em);overflow: hidden;']) {
+            '@supports (field-sizing: content){textarea.jot-grow{field-sizing: content;flex-basis: 0;height: auto;', '.jot-timing{height: calc(3 * 1.35em);overflow: hidden;']) {
             assert.ok(style.includes(rule), `the stylesheet keeps ${rule}`)
         }
         const edit = await editWith({})
@@ -3090,6 +3090,50 @@ async function main() {
             const rule = new RegExp(`${selector.replace('.', '\\.')}\\s*\\{[^}]*font-size:\\s*inherit`).exec(css)
             assert.ok(rule, `${selector} too`)
         }
+    })
+
+    await check('shown once sized: on mobile the form is transparent (its layout kept) until Joplin has sized the dialog to it - the page as wide and tall as the form, or its width changed at all; never on a height change alone (a keyboard); 6 s at most without the script', () => {
+        const vm = require('vm')
+        const css = read('src/form/form.css').replace(/\/\*[\s\S]*?\*\//g, '')
+        assert.ok(/\.jot-form\.-mobile:not\(\.-shown\)\s*\{\s*opacity:\s*0;\s*animation:\s*jot-show 0s 6s forwards;\s*\}/.test(css), 'transparent, shown by -shown or after 6 s')
+        assert.ok(/@keyframes jot-show\s*\{\s*to\s*\{\s*opacity:\s*1;\s*\}\s*\}/.test(css))
+        assert.ok(!/\.jot-form\.-mobile:not\(\.-shown\)\s*\{[^}]*(visibility|display|pointer-events)/.test(css), 'never hidden: Joplin measures it, autofocus works, nothing is left unusable')
+        const glue = read('src/form/formWebview.js')
+        const run = (start, steps) => {
+            const classes = new Set()
+            const form = { classList: { add: (name) => classes.add(name), contains: (name) => classes.has(name) }, getAttribute: (name) => (name === 'data-jot-ready' ? '1' : null),
+                querySelectorAll: () => [] }
+            let box = { width: 387, height: 420 }
+            const wrapper = { getBoundingClientRect: () => box }
+            const listeners = {}
+            const sandbox = {
+                document: { readyState: 'complete', documentElement: {}, body: {}, getElementById: (id) => (id === 'joplin-plugin-content' ? wrapper : null), querySelector: () => form },
+                MutationObserver: class { observe() {} }, setTimeout: () => 0, innerWidth: start.width, innerHeight: start.height,
+            }
+            sandbox.window = sandbox
+            sandbox.addEventListener = (type, handler) => { (listeners[type] = listeners[type] || []).push(handler) }
+            vm.createContext(sandbox)
+            vm.runInContext(glue, sandbox)
+            const seen = []
+            for (const step of steps) {
+                if (step.box) box = step.box
+                if (step.width) sandbox.innerWidth = step.width
+                if (step.height) sandbox.innerHeight = step.height
+                if (step.init) sandbox.showJotForm()
+                else for (const handler of listeners.resize || []) handler()
+                seen.push(classes.has('-shown'))
+            }
+            return seen
+        }
+        // A 412px phone: the dialog opens at 97% of the window (399) and most of its height, then Joplin sizes it to the 387px form.
+        assert.deepStrictEqual(run({ width: 399, height: 760 }, [{ init: true }, { height: 500 }, { width: 387, height: 420 }]), [false, false, true],
+            'not at its largest, not when a keyboard takes height, shown once sized')
+        assert.deepStrictEqual(run({ width: 387, height: 420 }, [{ init: true }]), [true], 'already sized when the script starts: shown at once')
+        assert.deepStrictEqual(run({ width: 399, height: 760 }, [{ init: true }, { width: 388, height: 700 }]), [false, true], 'any change of width is Joplin sizing it')
+        assert.deepStrictEqual(run({ width: 387, height: 700 }, [{ init: true, box: { width: 387, height: 900 } }]), [true], 'a form taller than the dialog: shown at its width')
+        const init = glue.slice(glue.indexOf('function initJotFormIfNeeded'))
+        assert.ok(/jotSetupAt = Date\.now\(\)\n\s*jotShownAt = 0\n\s*showJotTiming\(\)\n\s*showJotForm\(\)/.test(init), 'checked when the form is set up')
+        assert.ok(glue.includes("window.addEventListener('resize', showJotForm)"), 'and at every resize')
     })
 
     // ---------------------------------------------------------------- the sandbox proxy rule
