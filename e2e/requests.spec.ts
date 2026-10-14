@@ -158,6 +158,9 @@ test.describe('The 0.2 requests (desktop)', () => {
     await expect(textField.locator('option')).toContainText(['The current notebook', inbox, book]);
     await screen.locator('.button-bar button', { hasText: 'OK' }).first().click();
     await expect.poll(async () => screen.isVisible().catch(() => false), { timeout: 30_000 }).toBe(false);
+    // Joplin tells plugins of a setting change a second after the last one (Setting.scheduleChangeEvent, 3.7.21), and Jot keeps its settings in
+    // memory until it hears: give the notice its second.
+    await win.waitForTimeout(1500);
     await expect.poll(async () => selectedNoteId(win).catch(() => ''), { timeout: 20_000 }).toBe(readingId);
 
     // Issue 6: the inbox is the quick notes' notebook; a note from highlighted text has its own setting, the current notebook, so it starts in its

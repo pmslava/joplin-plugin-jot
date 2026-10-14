@@ -19,6 +19,10 @@
  * left to the host, which cancels the form. Enter in the Text is a newline, which the host does not touch.                                         *
  ***************************************************************************************************************************************************/
 
+// When this script began to run: on a phone each open is a fresh webview, so this is when the dialog's page was ready for it (the timing line's
+// "webview" part); on desktop the webview stays and this is long before the open.
+var jotScriptStart = Date.now()
+
 /** State of the current open **********************************************************************************************************************/
 // The island of the current open: { mode: 'create' | 'edit', notebooks: [{id, path}], tags: [title], defaults: { type, notebookId, dayStart },
 // pickerOpen, inThisNote: { choices, value, fallback } on the selection and trigger routes, else null }.
@@ -875,7 +879,10 @@ function showJotTiming(){
     var now = Date.now()
     var seconds = function(ms){ return (Math.max(0, ms) / 1000).toFixed(2) }
     var parts = (timing.parts || []).map(function(part){ return part[0] + ' ' + seconds(part[1]) })
-    parts.push('show ' + seconds(now - timing.htmlAt))
+    // The dialog showing itself, in two: the webview starting and loading the scripts (setHtml to this script's first line), and the form's own setup.
+    var scriptAt = Math.max(jotScriptStart, timing.htmlAt)
+    parts.push('webview ' + seconds(scriptAt - timing.htmlAt))
+    parts.push('setup ' + seconds(now - scriptAt))
     line.textContent = 'Opened in ' + seconds(now - timing.start) + ' s: ' + parts.join(', ')
 }
 
@@ -962,12 +969,12 @@ function initJotFormIfNeeded(){
     form.addEventListener('keydown', onJotFormKeyDown)
 
     setJotType(jotById('jotType').value)
-    showJotTiming()
     sizeJotGrowAll()
     writeJotDue(due.date, due.time)
     renderAlarmCalendar()
     if (!jotById('jotPicker').hasAttribute('hidden')) setJotPickerOpen(true)
     focusJotTitle()
+    showJotTiming()
 }
 
 window.addEventListener('focus', onJotWindowFocus)

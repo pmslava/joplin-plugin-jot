@@ -151,6 +151,9 @@ test.describe('Growing Title and Tags, and the In this note defaults (desktop)',
     await expect(trigger.locator('option')).toHaveText(['Replace the trigger with a link to the new note', 'Remove the trigger']);
     await screen.locator('.button-bar button', { hasText: 'OK' }).first().click();
     await expect.poll(async () => screen.isVisible().catch(() => false), { timeout: 30_000 }).toBe(false);
+    // Joplin tells plugins of a setting change a second after the last one (Setting.scheduleChangeEvent, 3.7.21), and Jot keeps its settings in
+    // memory until it hears: give the notice its second.
+    await win.waitForTimeout(1500);
     await expect.poll(async () => selectedNoteId(win).catch(() => ''), { timeout: 20_000 }).toBe(readingId);
 
     await callPluginCommand(win, 'editor.execCommand', { name: 'select', args: [0, 18] });

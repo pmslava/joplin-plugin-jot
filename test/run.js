@@ -78,7 +78,7 @@ async function check(name, fn) {
 function makeJoplin(options) {
     const state = {
         onStart: null, commands: [], menuItems: [], toolbarButtons: [], messageBoxes: [], warnings: [],
-        sections: [], settingSpecs: {}, settingWrites: [], globalReads: [], settingRegistrations: [], settingReads: [], settingBatches: [], syncHandlers: [],
+        sections: [], settingSpecs: {}, settingWrites: [], globalReads: [], settingRegistrations: [], settingReads: [], settingBatches: [], syncHandlers: [], settingChangeHandlers: [],
         dialogCreates: [], dialogScripts: [], dialogButtons: [], dialogHtml: [], dialogOpens: 0,
         dataGets: [], dataPosts: [], dataPuts: [], dataDeletes: [], executes: [], workspaceCalls: [], timeline: [],
         contentScripts: [], contentScriptHandlers: {}, selectionReads: 0,
@@ -110,6 +110,7 @@ function makeJoplin(options) {
                 if (options.settings && key in options.settings) return options.settings[key]
                 return state.settingSpecs[key] ? state.settingSpecs[key].value : undefined
             },
+            onChange: async (handler) => { state.settingChangeHandlers.push(handler) },
             // joplin.settings.values (3.7.21): { key: value } for the keys asked, in one call; settingsValuesMissing makes an app without it.
             values: async (keys) => {
                 if (options.settingsValuesMissing) throw new Error('joplin.settings.values is not a function')
@@ -1487,7 +1488,8 @@ async function main() {
             const { state, outcome } = await editWith(options)
             assert.strictEqual(outcome, null, JSON.stringify(options))
             assert.deepStrictEqual(state.messageBoxes, ['Jot: this note no longer exists.'], JSON.stringify(options))
-            assert.deepStrictEqual([state.dialogCreates, state.dialogOpens, state.timeline], [['jot.form'], 0, []], JSON.stringify(options))
+            assert.deepStrictEqual([state.dialogCreates.filter(id => id !== 'jot.form'), state.dialogOpens, state.timeline], [[], 0, []],
+                `${JSON.stringify(options)}: no edit dialog built or opened (the create form's may already be built by the warm-up)`)
         }
         for (const args of [{ mode: 'edit' }, { mode: 'edit', noteId: '' }, { mode: 'edit', noteId: 42 }]) {
             const { state, outcome } = await editWith({}, args)
@@ -2562,6 +2564,13 @@ async function main() {
         assert.deepStrictEqual(state.settingBatches.slice(-1)[0], ['defaultType', 'dayStartTime', 'defaultNotebook', 'textNotebook', 'tagsFrom', 'backlinkFor', 'backlinkTemplate',
             'backlinkPosition', 'openAfterCreate', 'selectionAction', 'triggerAction'], 'every setting the form starts from, in one call')
         assert.deepStrictEqual(state.settingReads, [], 'and no single reads')
+        const batchesAfterStartup = state.settingBatches.length
+        await withWarnings(state, () => state.commands.find(item => item.name === 'jot.open').execute())
+        assert.strictEqual(state.settingBatches.length, batchesAfterStartup, 'kept in memory: a second open makes no settings call')
+        assert.strictEqual(state.settingChangeHandlers.length, 1, 'changes are followed')
+        state.settingChangeHandlers[0]({ keys: ['defaultType'] })
+        await withWarnings(state, () => state.commands.find(item => item.name === 'jot.open').execute())
+        assert.strictEqual(state.settingBatches.length, batchesAfterStartup + 1, 'after a change the next open reads them again, in one call')
         await tick(5)
         assert.ok(folderReads(state) > afterStartup, 'the lists are read again once the form has closed, for the next open')
         assert.strictEqual(state.syncHandlers.length, 1, 'and after every sync')

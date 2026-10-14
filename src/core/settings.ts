@@ -356,7 +356,35 @@ async function readFormSettingValues(): Promise<Record<string, unknown>> {
     return values
 }
 
+// The form's settings as last read, kept in memory: an open makes no call for them. Any change to a setting forgets them (watchSettings), and the
+// next open, or the warm-up, reads them again. On a phone during or just after a sync, one settings call was measured at 2.9 to 12.5 s. Joplin
+// tells plugins of a change a second after the last one (Setting.scheduleChangeEvent, 3.7.21), so a form opened within that second still starts
+// on the old values; the next open has the new ones.
+let formSettingsCache: FormSettings | null = null
+
 export async function getFormSettings(): Promise<FormSettings> {
+    if (formSettingsCache) return formSettingsCache
+    const read = await readFormSettings()
+    if (settingsWatched) formSettingsCache = read
+    return read
+}
+
+/** watchSettings ***********************************************************************************************************************************
+ * Forgets the form's settings whenever one changes (the Settings screen, a sync of settings, Jot's own carry-over), so the next open reads them     *
+ * again. Never throws: an app that cannot report changes leaves the cache off, and every open reads the settings.                                  *
+ ***************************************************************************************************************************************************/
+let settingsWatched = false
+
+export async function watchSettings(): Promise<void> {
+    try {
+        await joplin.settings.onChange(() => { formSettingsCache = null })
+        settingsWatched = true
+    } catch (error) {
+        console.warn("Jot: could not follow setting changes; the form reads its settings on every open", error)
+    }
+}
+
+async function readFormSettings(): Promise<FormSettings> {
     const raw = await readFormSettingValues()
     const open = raw[OPEN_AFTER_CREATE_KEY]
     return {
@@ -374,6 +402,11 @@ export async function getFormSettings(): Promise<FormSettings> {
         selectionAction: String(raw[SELECTION_ACTION_KEY] || SELECTION_REPLACE),
         triggerAction: String(raw[TRIGGER_ACTION_KEY] || TRIGGER_LINK),
     }
+}
+
+// Whether the settings may be kept: only while changes are followed.
+export function settingsCacheable(): boolean {
+    return settingsWatched
 }
 
 /** registerNotebookChoices *************************************************************************************************************************

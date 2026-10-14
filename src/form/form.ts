@@ -51,7 +51,7 @@
 /** Imports *****************************************************************************************************************************************/
 import joplin from "api"
 import { buildFormHtml, FormNotebook, FormValues } from "./formHtml"
-import { FormSettings, getDayStartTime, getFormSettings, OPEN_IN_WINDOW, registerNotebookChoices } from "../core/settings"
+import { FormSettings, getDayStartTime, getFormSettings, OPEN_IN_WINDOW, registerNotebookChoices, watchSettings } from "../core/settings"
 import { SHOW_OPEN_TIMINGS, Stopwatch, stopwatch } from "../core/timing"
 import { isMobile } from "../core/platform"
 import { applySelectionEdit, editorIsMarkdown, readSelectedText } from "./editorSelection"
@@ -106,6 +106,8 @@ export interface FormPresets {
     trigger?: string
     // Internal: the open's stopwatch, started at the tap (openJot), so the selection read is timed too (core/timing.ts).
     timing?: Stopwatch
+    // Internal: the note the editor holds, read at the tap together with the selection (openJot), so the form does not ask again; null: none.
+    editorNote?: any
 }
 
 // What the commands resolve in create mode (brief section 6).
@@ -207,11 +209,12 @@ export async function runOpenCommand(args?: unknown): Promise<FormOutcome | Edit
 export async function openJot(route: string): Promise<FormOutcome | null> {
     if (formIsOpen) return null
     const timing = stopwatch()
-    const selection = await readSelectedText()
+    // Both at once: on a busy phone each call waits its turn, so two in a row cost two waits.
+    const [selection, editorNote] = await Promise.all([readSelectedText(), selectedNote()])
     timing.lap("selection")
     const split = FormModel.splitSelection(selection)
-    if (split.empty) return openForm(route, { timing })
-    return openForm(SELECTION_ROUTE, { title: split.title, body: split.body, selection, timing })
+    if (split.empty) return openForm(route, { timing, editorNote })
+    return openForm(SELECTION_ROUTE, { title: split.title, body: split.body, selection, timing, editorNote })
 }
 
 /** openForm ****************************************************************************************************************************************
@@ -311,14 +314,15 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
     // Issue 6: a note from text in a note (highlighted text, the typed trigger) and a quick note (nothing highlighted, or another plugin's call) start
     // differently - each has its own notebook setting, and the tags and the back link say for which.
     //
-    // QUICK TO OPEN. On a phone every call to Joplin is a round trip, so the open makes as few as it can before the form shows: the settings in one
-    // call (getFormSettings), the notebook and tag lists from the cache (formLists; read again in the background once the form closes), the dialog
-    // built at startup (warmUp). The current note and the platform are read alongside.
+    // QUICK TO OPEN. On a phone every call to Joplin is a round trip, and during or just after a sync each one waits for Joplin (measured: a settings
+    // read 2.9 to 12.5 s), so the open makes as few as it can before the form shows: the settings from memory (getFormSettings, read once, again
+    // after a change), the notebook and tag lists from the cache (formLists; read again in the background once the form closes), the dialog built at
+    // startup (warmUp), and the current note read together with the selection at the tap (openJot).
     const timing = presets.timing || stopwatch()
     const fromText = route === SELECTION_ROUTE || route === TRIGGER_ROUTE
-    const [settings, mobile, editorNote] = await Promise.all([
-        getFormSettings(), isMobile(), route === CALLER_ROUTE ? Promise.resolve(undefined) : selectedNote(),
-    ])
+    const editorNoteRead = route === CALLER_ROUTE ? Promise.resolve(undefined)
+        : presets.editorNote !== undefined ? Promise.resolve(presets.editorNote) : selectedNote()
+    const [settings, mobile, editorNote] = await Promise.all([getFormSettings(), isMobile(), editorNoteRead])
     timing.lap("settings")
     const settingNotebookId = fromText ? settings.textNotebookId : settings.quickNotebookId
     const lists = await formLists([settingNotebookId, editorNote && editorNote.parent_id, presets.notebookId])
@@ -438,10 +442,16 @@ async function formLists(needed: unknown[] = []): Promise<{ folders: any[], tags
 }
 
 /** warmUp ******************************************************************************************************************************************
- * Run once the plugin has started, never in its way: the lists read, and the create form's dialog built, so the first open costs neither. Never    *
- * throws.                                                                                                                                          *
+ * Run once the plugin has started, never in its way: setting changes followed, the settings and the lists read, and the create form's dialog      *
+ * built, so the first open costs none of it. Never throws.                                                                                         *
  ***************************************************************************************************************************************************/
 export async function warmUp(): Promise<void> {
+    await watchSettings()
+    try {
+        await getFormSettings()
+    } catch (error) {
+        console.warn("Jot: could not read the settings ahead of the form", error)
+    }
     await refreshLists()
     try {
         await getDialog(CREATE_DIALOG)
