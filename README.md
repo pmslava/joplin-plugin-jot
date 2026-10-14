@@ -74,7 +74,10 @@ Settings › Plugins › Jot:
 - In the Rich Text editor the typed trigger does not work (no plugin code runs there), and "Add a link after it" is not offered; the shortcut and the right-click entry work, and "Replace it with a link" writes the link as HTML.
 - The trigger ignores Markdown context: `++` after a space fires inside a code block too. Cancel once and that occurrence is left alone.
 - When the note list shows **All notes**, Joplin answers a new tag by selecting the note at the top of the list, which is the note Jot has just created. Jot notices and opens the note you were reading again, at the same scroll position and caret in the Markdown editor. Joplin can only do that by showing the note's notebook, so the note list switches from All notes to that notebook.
-- Cockpit calling Jot from its New note and New to-do buttons and its row menu comes in a later Cockpit version.
+
+## Works with Cockpit
+
+[Cockpit](https://github.com/pmslava/joplin-plugin-cockpit) supports Jot from version 2.8, on desktop. A right-click on its New note or New to-do button opens Jot's form with that type and the panel's notebook, and a plain click can be set to do the same. Quick edit… in the right-click menu of its notes list opens Jot's edit mode on that note. Neither plugin needs the other.
 
 ## For other plugins
 
