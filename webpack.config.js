@@ -177,6 +177,12 @@ const baseConfig = {
 				use: 'ts-loader',
 				exclude: /node_modules/,
 			},
+			// JOT: the form's stylesheet is part of the markup the plugin builds (src/form/formHtml.ts puts it in a <style> element), so
+			// require('./form.css') is the file's text.
+			{
+				test: /\.css$/,
+				type: 'asset/source',
+			},
 		],
 	},
 };

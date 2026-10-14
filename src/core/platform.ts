@@ -59,3 +59,26 @@ export function requireNodeModule(moduleName, expectedMember){
     }
     return null
 }
+
+/** formWidthOnMobile *******************************************************************************************************************************
+ * The form's width on a phone, in CSS pixels: 94% of the screen (inside Joplin's 97% cap on the dialog), at most the desktop's 440px, at least      *
+ * 240px; null when no screen is reported. Read here, in the plugin, so the width is in the form's markup from its first layout (formHtml.ts): on    *
+ * mobile the plugin runs in an Android WebView on the same screen as the dialog's, and screen.width is that screen in CSS pixels in both (a test    *
+ * build prints the two side by side). Read at each open, so a phone turned on its side gets its new width. Never from the viewport: the dialog is   *
+ * sized to the form, so a width taken from the dialog shrinks it at every measurement (0.2.1).                                                     *
+ ***************************************************************************************************************************************************/
+export function formWidthOnMobile(): number | null {
+    const screenWidth = screenWidthSeen()
+    if (screenWidth === null) return null
+    return Math.max(240, Math.min(440, Math.floor(screenWidth * 0.94)))
+}
+
+// The screen's width as the plugin's own webview reports it, or null when there is none (the harness runs in Node).
+export function screenWidthSeen(): number | null {
+    try {
+        const width = typeof screen !== "undefined" && screen ? Number(screen.width) : NaN
+        return width > 0 && isFinite(width) ? width : null
+    } catch (error) {
+        return null
+    }
+}

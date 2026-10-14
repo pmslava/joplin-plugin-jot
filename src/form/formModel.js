@@ -33,6 +33,8 @@
     var DUE_MESSAGE = 'Jot: the date must be YYYY-MM-DD and the time HH:MM (24-hour).'
     var NO_NOTEBOOK_MESSAGE = 'Jot: there is no notebook to create in.'
     var NO_NOTE_MESSAGE = 'Jot: this note no longer exists.'
+    // A notebook picked from the lists Jot kept from its last start, deleted since (on another device): the form opens again to pick another.
+    var NOTEBOOK_GONE_MESSAGE = 'Jot: that notebook no longer exists. Pick another one.'
     var NO_DATE = 'No date'
     var DEFAULT_DAY_START = '09:00'
 
@@ -806,6 +808,7 @@
         DUE_MESSAGE: DUE_MESSAGE,
         NO_NOTEBOOK_MESSAGE: NO_NOTEBOOK_MESSAGE,
         NO_NOTE_MESSAGE: NO_NOTE_MESSAGE,
+        NOTEBOOK_GONE_MESSAGE: NOTEBOOK_GONE_MESSAGE,
         NO_DATE: NO_DATE,
         DEFAULT_DAY_START: DEFAULT_DAY_START,
         KEEP: KEEP,

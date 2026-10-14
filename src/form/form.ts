@@ -41,9 +41,11 @@
  *                                                                                                                                                  *
  * THE DIALOGS. Two handles, because buttons are set per handle: jot.form for create mode, with Create (id ok, which Enter in a text input          *
  * resolves to), Create and open (id openAfter) and Cancel (id cancel, which Escape resolves to); jot.edit for edit mode, with Save (id ok) and     *
- * Cancel. Each is created on its first open (Harper's lazy build: a failed build is not remembered, so the next open tries again), with the same   *
- * scripts and stylesheet, and its buttons set once. The markup is set on every open (formHtml.ts, one builder for both modes); setHtml does not    *
- * re-run the scripts, which wire each new form themselves (formWebview.js). One form at a time, whichever the mode.                                *
+ * Cancel. The create form's is built at the plugin's start (warmUp), edit mode's on its first open; each build is the create, then the scripts and *
+ * the buttons sent together (applied in the order sent: one wait instead of six), and a failed build is not remembered, so the next open tries     *
+ * again (the handle is kept: a second create of the same id throws). The stylesheet is not one of the scripts: it travels in the markup            *
+ * (formHtml.ts). The markup is set on every open, sent with the open itself rather than awaited before it (Joplin applies the two in the order     *
+ * sent). Each open is a fresh page on both platforms (3.7), where the scripts wire the form (formWebview.js). One form at a time, whichever the mode. *
  *                                                                                                                                                  *
  * THE SANDBOX PROXY RULE: every joplin.* member is read and called in one expression.                                                              *
  ***************************************************************************************************************************************************/
@@ -51,9 +53,9 @@
 /** Imports *****************************************************************************************************************************************/
 import joplin from "api"
 import { buildFormHtml, FormNotebook, FormValues } from "./formHtml"
-import { FormSettings, getDayStartTime, getFormSettings, OPEN_IN_WINDOW, registerNotebookChoices, watchSettings } from "../core/settings"
+import { FormSettings, getFormSettings, OPEN_IN_WINDOW, registerNotebookChoices, settingsRegistered, StoredLists, storeLists } from "../core/settings"
 import { SHOW_OPEN_TIMINGS, Stopwatch, stopwatch } from "../core/timing"
-import { isMobile } from "../core/platform"
+import { formWidthOnMobile, isMobile, screenWidthSeen } from "../core/platform"
 import { applySelectionEdit, editorIsMarkdown, readSelectedText } from "./editorSelection"
 import { guardTiming, holdSelection, keepSelection } from "./selectionGuard"
 const FormModel = require("./formModel")
@@ -84,9 +86,11 @@ const EDIT_DIALOG: DialogSpec = { id: EDIT_DIALOG_ID, buttons: EDIT_BUTTONS }
 const PAGE_LIMIT = 100
 // What edit mode reads of the note (brief 4.5): never the body, never the completion.
 const EDIT_NOTE_FIELDS = ["id", "title", "is_todo", "parent_id", "todo_due"]
-// Loaded into the dialog in this order, though they run in the order they finish loading (hence the call-time globals in formWebview.js).
+// What the form uses of the note the editor holds (its notebook, the back link, its tags): never the body.
+const EDITOR_NOTE_FIELDS = ["id", "title", "is_todo", "parent_id"]
+// Loaded into the dialog in this order, though they run in the order they finish loading (hence the call-time globals in formWebview.js). The
+// stylesheet is not here: it is part of the markup (formHtml.ts, FORM_CSS).
 export const FORM_SCRIPTS = [
-    "./form/form.css",
     "./form/alarmQuick.js",
     "./form/searchTokens.js",
     "./form/formModel.js",
@@ -160,8 +164,9 @@ interface InThisNote {
 }
 
 /** Variable Setup **********************************************************************************************************************************/
-// Each dialog handle's build, by dialog id, once started.
+// Each dialog handle's build, by dialog id, once started; and each handle once created, kept through a failed build (create is not repeated).
 var dialogPromises: { [id: string]: Promise<string> } = {}
+var dialogHandles: { [id: string]: string } = {}
 // A second open while the form is up (the shortcut pressed twice) is ignored rather than replacing the markup under the user.
 var formIsOpen = false
 // The note created on the trigger route with Open on, and where it opens, waiting for the content script to ask for its open (openTriggerNote).
@@ -182,12 +187,25 @@ function getDialog(spec: DialogSpec): Promise<string> {
 }
 
 async function buildDialog(spec: DialogSpec): Promise<string> {
-    const handle = await joplin.views.dialogs.create(spec.id)
-    for (const script of FORM_SCRIPTS){
-        await joplin.views.dialogs.addScript(handle, script)
-    }
-    await joplin.views.dialogs.setButtons(handle, spec.buttons)
+    if (!dialogHandles[spec.id]) dialogHandles[spec.id] = await joplin.views.dialogs.create(spec.id)
+    const handle = dialogHandles[spec.id]
+    // The scripts and the buttons together: Joplin applies each as it arrives, in the order sent, so the scripts keep their order.
+    await Promise.all([
+        ...FORM_SCRIPTS.map(script => joplin.views.dialogs.addScript(handle, script)),
+        joplin.views.dialogs.setButtons(handle, spec.buttons),
+    ])
     return handle
+}
+
+/** showDialog **************************************************************************************************************************************
+ * Sets the markup and opens the dialog, resolving what open resolves. The markup is not awaited before the open: both are applied by Joplin in the  *
+ * order they are sent (each is one store update made the moment it arrives, mobile 3.7.8 and desktop alike), and on a busy phone the wait saved is *
+ * one round trip, measured at up to a second. A refused setHtml is a console warning (open is refused alike, being the same dialog).               *
+ ***************************************************************************************************************************************************/
+async function showDialog(handle: string, html: string): Promise<any> {
+    const htmlSet = joplin.views.dialogs.setHtml(handle, html)
+    htmlSet.catch(error => console.warn("Jot: could not write the form", error))
+    return joplin.views.dialogs.open(handle)
 }
 
 /** runOpenCommand **********************************************************************************************************************************
@@ -209,8 +227,8 @@ export async function runOpenCommand(args?: unknown): Promise<FormOutcome | Edit
 export async function openJot(route: string): Promise<FormOutcome | null> {
     if (formIsOpen) return null
     const timing = stopwatch()
-    // Both at once: on a busy phone each call waits its turn, so two in a row cost two waits.
-    const [selection, editorNote] = await Promise.all([readSelectedText(), selectedNote()])
+    // Both at once: on a busy phone each call waits its turn, so two in a row cost two waits. The note is usually known already (noteAtTap).
+    const [selection, editorNote] = await Promise.all([readSelectedText(), noteAtTap(timing)])
     timing.lap("selection")
     const split = FormModel.splitSelection(selection)
     if (split.empty) return openForm(route, { timing, editorNote })
@@ -315,54 +333,61 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
     // differently - each has its own notebook setting, and the tags and the back link say for which.
     //
     // QUICK TO OPEN. On a phone every call to Joplin is a round trip, and during or just after a sync each one waits for Joplin (measured: a settings
-    // read 2.9 to 12.5 s), so the open makes as few as it can before the form shows: the settings from memory (getFormSettings, read once, again
-    // after a change), the notebook and tag lists from the cache (formLists; read again in the background once the form closes), the dialog built at
-    // startup (warmUp), and the current note read together with the selection at the tap (openJot).
+    // read 2.9 to 12.5 s), so the open makes as few as it can before the form shows, and sends together the ones it needs: the settings from memory
+    // (getFormSettings, read once at the start, again after a change), the notebook and tag lists from the cache (formLists: read at the start, kept
+    // across restarts, read again after a sync and a while after a form), the dialog built at the start (warmUp), the note the editor holds from the
+    // record kept of it (noteAtTap), and its tags and the editor's kind read together.
     const timing = presets.timing || stopwatch()
     const fromText = route === SELECTION_ROUTE || route === TRIGGER_ROUTE
     const editorNoteRead = route === CALLER_ROUTE ? Promise.resolve(undefined)
-        : presets.editorNote !== undefined ? Promise.resolve(presets.editorNote) : selectedNote()
+        : presets.editorNote !== undefined ? Promise.resolve(presets.editorNote) : noteAtTap(timing)
     const [settings, mobile, editorNote] = await Promise.all([getFormSettings(), isMobile(), editorNoteRead])
     timing.lap("settings")
     const settingNotebookId = fromText ? settings.textNotebookId : settings.quickNotebookId
-    const lists = await formLists([settingNotebookId, editorNote && editorNote.parent_id, presets.notebookId])
-    timing.lap("lists")
-    const folders = lists.folders
-    const tagList = lists.tags
-    const row = await inThisNoteFor(route, presets, settings)
-    const defaultType = settings.defaultType
-    const dayStartSetting = settings.dayStartTime
     const tagsFrom = settings.tagsFrom
+    // The note the user is in (not on the caller's route: another plugin's panel has no such note): its tags fill the Tags when the setting says,
+    // and the back link points to it. Its tags are read alongside the lists and the In this note row.
+    const parent = route !== CALLER_ROUTE && editorNote && editorNote.id ? editorNote : null
+    const parentTagsRead = parent && FormModel.appliesFor(tagsFrom, fromText) ? readNoteTagsCsv(parent.id) : Promise.resolve("")
+    const [startLists, row, parentTags] = await Promise.all([
+        formLists([settingNotebookId, editorNote && editorNote.parent_id, presets.notebookId]),
+        inThisNoteFor(route, presets, settings),
+        parentTagsRead,
+    ])
+    timing.lap("lists")
     const backlinkSettings = settings.backlink
     const openDefault = settings.openAfterCreate
-    const notebooks: FormNotebook[] = FormModel.buildNotebookPaths(folders)
-    if (!notebooks.length){
+    // What the form makes of the lists: the notebooks by path, the tag titles, the notebook it starts on and the back link (which names the note's
+    // notebook). Made again from fresh lists when the notebook picked turns out to be gone (below).
+    const fromLists = async (lists: FormLists) => {
+        const notebooks: FormNotebook[] = FormModel.buildNotebookPaths(lists.folders)
+        const tagTitles: string[] = lists.tags.map(tag => tag.title).filter(title => !!title).sort()
+        const notebookId = notebooks.length ? await currentNotebookId(notebooks, presets.notebookId, settingNotebookId, editorNote) : ""
+        const backlinkLine: string = parent ? FormModel.backlinkText(backlinkSettings.template, parent, lists.folders) : ""
+        const backlink = backlinkLine ? { text: backlinkLine, position: backlinkSettings.position, on: FormModel.appliesFor(backlinkSettings.for, fromText) } : null
+        return { lists, notebooks, tagTitles, notebookId, backlinkLine, backlink }
+    }
+    let shown = await fromLists(startLists)
+    if (!shown.notebooks.length){
         await joplin.views.dialogs.showMessageBox(FormModel.NO_NOTEBOOK_MESSAGE)
         return null
     }
-    const tagTitles = tagList.map(tag => tag.title).filter(title => !!title).sort()
-    const resolvedType = FormModel.normalizeType(presets.type, defaultType)
-    const dayStart = FormModel.dayStartText(dayStartSetting)
-    // The note the user is in (not on the caller's route: another plugin's panel has no such note): its tags fill the Tags when the setting says,
-    // and the back link points to it.
-    const parent = route !== CALLER_ROUTE && editorNote && editorNote.id ? editorNote : null
-    const parentTags = parent && FormModel.appliesFor(tagsFrom, fromText) ? await readNoteTagsCsv(parent.id) : ""
-    const backlinkLine = parent ? FormModel.backlinkText(backlinkSettings.template, parent, folders) : ""
-    const backlink = backlinkLine ? { text: backlinkLine, position: backlinkSettings.position, on: FormModel.appliesFor(backlinkSettings.for, fromText) } : null
-    const notebookId = await currentNotebookId(notebooks, presets.notebookId, settingNotebookId, editorNote)
+    const resolvedType = FormModel.normalizeType(presets.type, settings.defaultType)
+    const dayStart = FormModel.dayStartText(settings.dayStartTime)
     const inThisNoteChoices = row.choices
     const open = FormModel.openChoice(openDefault, mobile)
+    const mobileWidth = mobile ? formWidthOnMobile() : null
 
     let values: FormValues = {
         type: resolvedType,
         title: presets.title || "",
         body: presets.body || "",
-        notebookId: notebookId,
+        notebookId: shown.notebookId,
         tags: parentTags,
         dueDate: "",
         dueTime: "",
         inThisNote: row.value,
-        backlink: backlink ? (backlink.on ? FormModel.BACKLINK_ADD : FormModel.BACKLINK_NONE) : "",
+        backlink: shown.backlink ? (shown.backlink.on ? FormModel.BACKLINK_ADD : FormModel.BACKLINK_NONE) : "",
         open: open,
     }
     let pickerOpen = false
@@ -372,14 +397,14 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
 
     try {
         for (;;){
-            await joplin.views.dialogs.setHtml(handle, buildFormHtml({
-                notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen, inThisNoteChoices, inThisNoteLabels: row.labels, inThisNoteTitles: row.titles,
-                inThisNoteDefault: row.fallback, backlinkText: backlinkLine,
-                timing: SHOW_OPEN_TIMINGS ? { start: timing.start, parts: timing.parts, htmlAt: Date.now() } : null,
+            const result = await showDialog(handle, buildFormHtml({
+                notebooks: shown.notebooks, tags: shown.tagTitles, values, dayStart, mobile, mobileWidth, pickerOpen, inThisNoteChoices,
+                inThisNoteLabels: row.labels, inThisNoteTitles: row.titles, inThisNoteDefault: row.fallback, backlinkText: shown.backlinkLine,
+                timing: SHOW_OPEN_TIMINGS ? { start: timing.start, parts: timing.parts, htmlAt: Date.now(), screen: screenWidthSeen() } : null,
             }))
-            const result = await joplin.views.dialogs.open(handle)
             const plan = FormModel.planCreate(result, {
-                defaultType: resolvedType, dayStart, notebookId, inThisNoteChoices, inThisNoteDefault: row.fallback, mobile, openDefault: open, backlink,
+                defaultType: resolvedType, dayStart, notebookId: shown.notebookId, inThisNoteChoices, inThisNoteDefault: row.fallback, mobile,
+                openDefault: open, backlink: shown.backlink,
             })
             if (plan.kind === "none" || plan.kind === "nothing") return null
             if (plan.kind === "invalidDue"){
@@ -389,40 +414,68 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
                 pickerOpen = true
                 continue
             }
+            const fresh = await notebookGone(shown.lists, plan.note.parent_id)
+            if (fresh){
+                // Picked from the lists kept from the last start, and gone since (deleted on another device): say so, and show the form again as
+                // typed, its notebooks read afresh and the notebook it starts on chosen again.
+                await joplin.views.dialogs.showMessageBox(FormModel.NOTEBOOK_GONE_MESSAGE)
+                shown = await fromLists(fresh)
+                if (!shown.notebooks.length){
+                    await joplin.views.dialogs.showMessageBox(FormModel.NO_NOTEBOOK_MESSAGE)
+                    return null
+                }
+                values = { ...plan.values, notebookId: shown.notebookId }
+                pickerOpen = false
+                continue
+            }
             return await createNote(plan, row)
         }
     } finally {
-        // The lists for the next open, read now that this one is over (a notebook or tag made meanwhile shows from the next open).
-        void refreshLists()
+        // The lists for the next open, read a while after this one is over (a notebook or tag made meanwhile shows from the next open), not at once:
+        // a second form opened right away would wait behind the read.
+        scheduleListRefresh()
     }
 }
 
-/** refreshNotebookSetting **************************************************************************************************************************
- * Registers the notebook setting's options from the notebooks that exist (settings.ts, registerNotebookChoices). Run at startup; the form does the  *
- * same each time it reads the notebooks. Never throws.                                                                                             *
+/** The notebook and tag lists: a cache ****************************************************************************************************************
+ * The form shows every notebook and every tag, which on a phone took a round trip per hundred before it could open (12 s during a sync). So the    *
+ * form opens on what was read last (formLists), and the lists are read when the plugin starts (warmUp), after every sync, and a while after every  *
+ * form (scheduleListRefresh: not at once, or a second form opened right away would wait behind the read). The first form after a start, before    *
+ * that read is back, opens on the lists stored at the last read (adoptStoredLists; settings.ts, the stored lists). A notebook the form must start  *
+ * on that the cache does not hold (made since the last read: the note you are in may live there) makes the form read the lists first, so it never  *
+ * starts on the wrong notebook; so does a cache with no notebook at all, so the form never says there is none when one was made since. A notebook   *
+ * picked from stored lists is checked against the first fresh read before anything is created in it (notebookGone). Tags typed that are not in the *
+ * cache are still created on Create, which reads the tags afresh (attachTags), and those Jot creates join the cache at once (rememberTag).         *
+ *                                                                                                                                                  *
+ * What a read changes besides the cache - the notebook settings' dropdowns (registerNotebookChoices) and the stored copy (storeLists) - follows it  *
+ * in the background, one read after the other, and only once Jot's settings are registered (an earlier registration would be wiped by theirs); the *
+ * form waits for neither.                                                                                                                          *
  ***************************************************************************************************************************************************/
-export async function refreshNotebookSetting(): Promise<void> {
-    await refreshLists()
+interface FormLists {
+    folders: any[]
+    tags: any[]
+    // Read in this run of the plugin (true), or stored from the last one (false).
+    fresh: boolean
 }
 
-/** The notebook and tag lists: a cache ****************************************************************************************************************
- * The form shows every notebook and every tag, which on a phone took a round trip per hundred before it could open. They are read at startup and   *
- * again after every form, and the form opens on what was read last (formLists). A list read is also when the notebook settings' dropdowns are       *
- * registered again. A notebook the form must start on that the cache does not hold (made since the last read: the note you are in may live there)  *
- * makes the form read the lists first, so it never starts on the wrong notebook; so does a cache with no notebook at all, so the form never says   *
- * there is none when one was made since. Tags typed that are not in the cache are still created on Create,                                         *
- * which reads the tags afresh (attachTags).                                                                                                         *
- ***************************************************************************************************************************************************/
-var listCache: { folders: any[], tags: any[] } | null = null
+var listCache: FormLists | null = null
 var listRead: Promise<void> | null = null
+var listReadAfter: Promise<void> | null = null
+var listFollowUps: Promise<void> = Promise.resolve()
 
-export function refreshLists(): Promise<void> {
+// `readAfterNow`: the caller needs a read begun after this moment (a sync has just ended: a read already out may have taken its pages before the
+// sync wrote them), so one more read follows the one in flight. Anyone else joins the read in flight.
+export function refreshLists(readAfterNow = false): Promise<void> {
+    if (listRead && readAfterNow){
+        if (!listReadAfter) listReadAfter = listRead.then(() => { listReadAfter = null; return refreshLists() })
+        return listReadAfter
+    }
     if (!listRead){
         listRead = (async () => {
             try {
                 const [folders, tags] = await Promise.all([getAllFolders(), getAllTags()])
-                listCache = { folders, tags }
-                await registerNotebookChoices(FormModel.buildNotebookPaths(folders))
+                listCache = { folders, tags, fresh: true }
+                followListRead(folders, tags, true)
             } catch (error) {
                 console.warn("Jot: could not read the notebooks and tags", error)
             } finally {
@@ -433,31 +486,181 @@ export function refreshLists(): Promise<void> {
     return listRead
 }
 
-async function formLists(needed: unknown[] = []): Promise<{ folders: any[], tags: any[] }> {
+// The dropdowns and, after a fresh read, the stored copy: one read's follow-ups after the last one's, never throwing.
+function followListRead(folders: any[], tags: any[], store: boolean): void {
+    listFollowUps = listFollowUps.then(async () => {
+        await settingsRegistered()
+        await registerNotebookChoices(FormModel.buildNotebookPaths(folders))
+        if (store) await storeLists(folders, tags)
+    }).catch(error => console.warn("Jot: could not update the notebook settings from the lists", error))
+}
+
+/** adoptStoredLists ********************************************************************************************************************************
+ * The lists stored at the last read (setupSettings' startup read), taken as the cache when no fresh read has come back yet. They fill the notebook *
+ * settings' dropdowns too, until the fresh read replaces them.                                                                                     *
+ ***************************************************************************************************************************************************/
+export function adoptStoredLists(stored: StoredLists | null): void {
+    if (!stored || listCache) return
+    listCache = { folders: stored.folders, tags: stored.tags, fresh: false }
+    followListRead(stored.folders, stored.tags, false)
+}
+
+async function formLists(needed: unknown[] = []): Promise<FormLists> {
     const held = (id: unknown) => !id || !listCache || listCache.folders.some(folder => folder && folder.id === id)
     // No cache, a cache with no notebook at all (read before the first one was made: the form would say there is none), or one without a notebook
     // the form must start on: read first.
     if (!listCache || !listCache.folders.length || !needed.every(held)) await refreshLists()
-    return listCache || { folders: [], tags: [] }
+    return listCache || { folders: [], tags: [], fresh: false }
+}
+
+/** notebookGone ************************************************************************************************************************************
+ * For a form shown from stored lists: the lists to show the form again with when the notebook picked is gone since the last start (deleted on     *
+ * another device, or in the trash), else null - also when the lists shown were fresh, or no notebook was picked. The fresh lists decide when they  *
+ * are back; until then ONE read of that notebook does, not the whole read of the lists: the dialog has closed by now, and the note and the edit to *
+ * the highlighted text wait on this. A notebook that cannot be told gone (any error but not-found) is taken as there, as before lists were stored. *
+ ***************************************************************************************************************************************************/
+async function notebookGone(shown: FormLists, notebookId: unknown): Promise<FormLists | null> {
+    if (shown.fresh || typeof notebookId !== "string" || !notebookId) return null
+    const held = (lists: FormLists) => lists.folders.some(folder => folder && folder.id === notebookId)
+    if (listCache && listCache.fresh) return held(listCache) ? null : listCache
+    if (await notebookExists(notebookId)) return null
+    // Gone: the form opens again, on the fresh lists when they can be had, else on the stored ones without that notebook.
+    await refreshLists()
+    if (listCache && listCache.fresh) return listCache
+    return { ...shown, folders: shown.folders.filter(folder => folder && folder.id !== notebookId) }
+}
+
+async function notebookExists(id: string): Promise<boolean> {
+    try {
+        const folder = await joplin.data.get(["folders", id], { fields: ["id", "deleted_time"] })
+        return !!folder && folder.id === id && !folder.deleted_time
+    } catch (error) {
+        if (/not\s*found/i.test(String((error && (error as any).message) || error))) return false
+        console.warn(`Jot: could not check the notebook ${id}; creating in it`, error)
+        return true
+    }
+}
+
+/** The background clock *****************************************************************************************************************************
+ * How long after a form closes the lists are read again (afterFormMs), and how long after a selection change (selectionMs) and after a change to  *
+ * the note, saved as it is typed (changeMs), the note the editor holds is read: a pause, not every keystroke. The harness shortens them           *
+ * (globalThis.__jotBackgroundTiming), as it does the selection guard's.                                                                            *
+ ***************************************************************************************************************************************************/
+const BACKGROUND_TIMING = { afterFormMs: 4000, selectionMs: 300, changeMs: 1000 }
+
+function backgroundTiming(): typeof BACKGROUND_TIMING {
+    const override = (globalThis as any).__jotBackgroundTiming
+    return override && typeof override === "object" ? { ...BACKGROUND_TIMING, ...override } : BACKGROUND_TIMING
+}
+
+/** scheduleListRefresh *****************************************************************************************************************************
+ * The lists read again a while after a form closes (afterFormMs), the timer restarted by every form; while a form is up (another create form, or  *
+ * edit mode's) it waits again rather than compete with that form's own calls.                                                                      *
+ ***************************************************************************************************************************************************/
+var listRefreshTimer: any = null
+
+function scheduleListRefresh(): void {
+    if (listRefreshTimer) clearTimeout(listRefreshTimer)
+    listRefreshTimer = setTimeout(() => {
+        listRefreshTimer = null
+        if (formIsOpen) scheduleListRefresh()
+        else void refreshLists()
+    }, backgroundTiming().afterFormMs)
+}
+
+// A tag Jot has just created joins the cached list, so the next form suggests it before the lists are read again.
+function rememberTag(tag: any): void {
+    if (!listCache || !tag || !tag.title) return
+    if (!listCache.tags.some(item => item && item.title === tag.title)) listCache.tags = [...listCache.tags, { id: tag.id || "", title: tag.title }]
 }
 
 /** warmUp ******************************************************************************************************************************************
- * Run once the plugin has started, never in its way: setting changes followed, the settings and the lists read, and the create form's dialog      *
- * built, so the first open costs none of it. Never throws.                                                                                         *
+ * Started first thing in onStart and never awaited, never in its way, needing nothing the start sets up: the create form's dialog built, the lists *
+ * read, and the note the editor holds followed (followEditorNote), so the first open costs none of it. The settings are read by the start itself  *
+ * (setupSettings). Never throws.                                                                                                                   *
  ***************************************************************************************************************************************************/
 export async function warmUp(): Promise<void> {
-    await watchSettings()
+    const dialog = getDialog(CREATE_DIALOG).catch(error => console.warn("Jot: could not prepare the form", error))
+    await Promise.all([dialog, refreshLists(), followEditorNote()])
+}
+
+/** The note the editor holds: a record ************************************************************************************************************
+ * Every way into the form wants the note you are in (its notebook, its tags, the back link), and asking Joplin at the tap (workspace.selectedNote) *
+ * is a database read of the whole note, body and all: seconds on a phone just after a sync (the 7.33 s "selection" of 2026-10-14). So the note is  *
+ * read ahead, when Joplin reports that the selection changed (onNoteSelectionChange), with the fields the form uses and never the body; a change   *
+ * to the note (onNoteChange: its title, its notebook, or only its text) has it read again a moment later. A tap takes the record when it is the     *
+ * one selected note's and no change has come since its read began; otherwise it reads the note then, as before. Nothing here throws: an app that    *
+ * cannot report either event leaves the record off.                                                                                                *
+ ***************************************************************************************************************************************************/
+var editorRecord: { id: string, note: any, changesAtRead: number } | null = null
+// The one selected note's id as the last event gave it ("" for none or several), the changes counted since, and the read on its way.
+var editorSelectedId = ""
+var editorChanges = 0
+var editorRecordTimer: any = null
+
+async function followEditorNote(): Promise<void> {
+    const changesBefore = editorChanges
     try {
-        await getFormSettings()
+        await joplin.workspace.onNoteSelectionChange((event: any) => {
+            const ids = event && Array.isArray(event.value) ? event.value : []
+            editorSelectedId = ids.length === 1 && typeof ids[0] === "string" ? ids[0] : ""
+            editorChanges++
+            scheduleEditorRecord(backgroundTiming().selectionMs)
+        })
+        await joplin.workspace.onNoteChange(() => {
+            editorChanges++
+            scheduleEditorRecord(backgroundTiming().changeMs)
+        })
     } catch (error) {
-        console.warn("Jot: could not read the settings ahead of the form", error)
+        console.warn("Jot: could not follow the note you are in; the form reads it when it opens", error)
+        return
     }
-    await refreshLists()
+    // The note already open when the listener came: Joplin reports a selection only when it changes after that (one previous value per property,
+    // shared by every plugin that listens), so it is asked once (selectedNoteIds, no database read), as Cockpit does - unless an event came first.
     try {
-        await getDialog(CREATE_DIALOG)
+        const ids = await joplin.workspace.selectedNoteIds()
+        if (editorChanges !== changesBefore) return
+        editorSelectedId = Array.isArray(ids) && ids.length === 1 && typeof ids[0] === "string" ? ids[0] : ""
+        editorChanges++
+        scheduleEditorRecord(0)
     } catch (error) {
-        console.warn("Jot: could not prepare the form", error)
+        // Left to the first event.
     }
+}
+
+function scheduleEditorRecord(delayMs: number): void {
+    if (editorRecordTimer) clearTimeout(editorRecordTimer)
+    editorRecordTimer = setTimeout(() => { editorRecordTimer = null; void readEditorRecord() }, delayMs)
+}
+
+async function readEditorRecord(): Promise<void> {
+    const id = editorSelectedId
+    const changesAtRead = editorChanges
+    if (!id){
+        editorRecord = null
+        return
+    }
+    try {
+        const note = await joplin.data.get(["notes", id], { fields: EDITOR_NOTE_FIELDS })
+        if (note && note.id === id) editorRecord = { id, note, changesAtRead }
+    } catch (error) {
+        editorRecord = null
+    }
+}
+
+/** noteAtTap ***************************************************************************************************************************************
+ * The note the editor holds, for an open: the record when it is current (above), else workspace.selectedNote as before. A test build notes which.    *
+ ***************************************************************************************************************************************************/
+async function noteAtTap(timing?: Stopwatch): Promise<any> {
+    const record = editorRecord
+    if (record && editorSelectedId && record.id === editorSelectedId && record.changesAtRead === editorChanges){
+        if (timing) timing.parts.push(["note kept", 0])
+        return record.note
+    }
+    const started = Date.now()
+    const note = await selectedNote()
+    if (timing) timing.parts.push(["note read", Date.now() - started])
+    return note
 }
 
 /** readNoteTagsCsv *********************************************************************************************************************************
@@ -483,7 +686,7 @@ async function currentNotebookId(notebooks: FormNotebook[], callerNotebookId?: s
     const known = (id: any) => !!id && notebooks.some(item => item.id === id)
     const settled = known(callerNotebookId) || known(settingNotebookId)
     // The caller's route has not read the editor's note (it has no note to link back to): it is read here, and only when it decides.
-    const note = settled ? null : (editorNote === undefined ? await selectedNote() : editorNote)
+    const note = settled ? null : (editorNote === undefined ? await noteAtTap() : editorNote)
     const candidates: any = {
         callerNotebookId: callerNotebookId || null,
         settingNotebookId: settingNotebookId || null,
@@ -573,6 +776,7 @@ async function attachTags(noteId: string, titles: string[]): Promise<number> {
                 const created = await joplin.data.post(["tags"], null, { title })
                 tagId = created.id
                 existing.set(FormModel.tagKey(title), tagId)
+                rememberTag(created)
             }
             await joplin.data.post(["tags", tagId, "notes"], null, { id: noteId })
             attached++
@@ -631,13 +835,13 @@ async function runEdit(noteId: string): Promise<EditOutcome | null> {
         await joplin.views.dialogs.showMessageBox(FormModel.NO_NOTE_MESSAGE)
         return null
     }
-    const [lists, dayStartSetting, mobile] = await Promise.all([formLists([loaded.note.parent_id]), getDayStartTime(), isMobile()])
-    const folders = lists.folders
-    const tagList = lists.tags
-    const notebooks: FormNotebook[] = FormModel.buildNotebookPaths(folders)
-    const tagTitles = tagList.map(tag => tag.title).filter(title => !!title).sort()
-    const dayStart = FormModel.dayStartText(dayStartSetting)
+    const [lists, settings, mobile] = await Promise.all([formLists([loaded.note.parent_id]), getFormSettings(), isMobile()])
+    let notebooks: FormNotebook[] = FormModel.buildNotebookPaths(lists.folders)
+    let tagTitles: string[] = lists.tags.map(tag => tag.title).filter(title => !!title).sort()
+    let shownLists = lists
+    const dayStart = FormModel.dayStartText(settings.dayStartTime)
     const start = FormModel.editStart(loaded.note, loaded.tags)
+    const mobileWidth = mobile ? formWidthOnMobile() : null
 
     let values: FormValues = {
         type: start.type,
@@ -653,8 +857,9 @@ async function runEdit(noteId: string): Promise<EditOutcome | null> {
     const handle = await getDialog(EDIT_DIALOG)
 
     for (;;){
-        await joplin.views.dialogs.setHtml(handle, buildFormHtml({ mode: FormModel.EDIT_MODE, notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen }))
-        const result = await joplin.views.dialogs.open(handle)
+        const result = await showDialog(handle, buildFormHtml({
+            mode: FormModel.EDIT_MODE, notebooks, tags: tagTitles, values, dayStart, mobile, mobileWidth, pickerOpen,
+        }))
         const plan = FormModel.planEdit(result, start, { dayStart })
         if (plan.kind === "none") return null
         if (plan.kind === "invalidDue"){
@@ -662,6 +867,18 @@ async function runEdit(noteId: string): Promise<EditOutcome | null> {
             await joplin.views.dialogs.showMessageBox(FormModel.DUE_MESSAGE)
             values = plan.values
             pickerOpen = true
+            continue
+        }
+        const fresh = plan.put && plan.put.parent_id ? await notebookGone(shownLists, plan.put.parent_id) : null
+        if (fresh){
+            // Moved to a notebook picked from the lists kept from the last start, and gone since: say so, and show the form again as typed, its
+            // notebooks read afresh and the note's own notebook in the field.
+            await joplin.views.dialogs.showMessageBox(FormModel.NOTEBOOK_GONE_MESSAGE)
+            shownLists = fresh
+            notebooks = FormModel.buildNotebookPaths(fresh.folders)
+            tagTitles = fresh.tags.map(tag => tag.title).filter(title => !!title).sort()
+            values = { ...plan.values, notebookId: start.notebookId }
+            pickerOpen = false
             continue
         }
         return await saveEdit(noteId, plan)
@@ -675,9 +892,12 @@ async function runEdit(noteId: string): Promise<EditOutcome | null> {
  ***************************************************************************************************************************************************/
 async function readNoteToEdit(noteId: string): Promise<{ note: any, tags: any[] } | null> {
     try {
-        const note = await joplin.data.get(["notes", noteId], { fields: EDIT_NOTE_FIELDS })
+        // Together: on a phone each read is a round trip.
+        const [note, tags] = await Promise.all([
+            joplin.data.get(["notes", noteId], { fields: EDIT_NOTE_FIELDS }),
+            getAllPages(["notes", noteId, "tags"], ["id", "title"]),
+        ])
         if (!note || !note.id) return null
-        const tags = await getAllPages(["notes", noteId, "tags"], ["id", "title"])
         return { note, tags }
     } catch (error) {
         console.warn(`Jot: could not read the note ${noteId} to edit it`, error)

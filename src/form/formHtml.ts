@@ -2,10 +2,14 @@
  * The form's markup, built by the host on every open and handed to dialogs.setHtml (brief 4.1, 4.2). Pure: everything it shows comes in as data,    *
  * so the harness reads what it emits through the stubbed setHtml.                                                                                  *
  *                                                                                                                                                  *
- * EVERY FIELD IS IN THE INITIAL MARKUP. Joplin takes the dialog's first size from this markup before any script has run, and then re-measures it    *
- * live (a ResizeObserver on #joplin-plugin-content, 3.6.14), so a field added by script would open the dialog short and then make it jump. The       *
- * script only fills what does not change the size: the suggestion rows (absolutely positioned, out of the flow) and the calendar and time columns   *
- * of the picker (in a section that starts folded; unfolding it grows the dialog, which is the intent).                                             *
+ * EVERY FIELD AND EVERY SIZE IS IN THE INITIAL MARKUP. Joplin takes the dialog's first size from this markup before any script or file has      *
+ * arrived: on desktop a ResizeObserver re-measures it live; on a phone (3.7.8, useDialogSize) the dialog shows at the first measurement and is    *
+ * measured again every 500 ms - seconds, while a sync keeps Joplin busy - so anything that changed the size after the first measurement made the  *
+ * form change size and shape under a user already typing (Android, 2026-10-14). Hence the stylesheet travels IN the markup (form.css, minified,  *
+ * the first element: FORM_CSS), the platform's layout is a class on the form (-mobile), the phone's width is a pixel rule made here from the       *
+ * screen (mobileWrapperCss), and the script fills only what does not change the size: the suggestion rows (absolutely positioned, out of the       *
+ * flow) and the calendar and time columns of the picker (in a section that starts folded, its height reserved; unfolding it grows the dialog,     *
+ * which is the intent).                                                                                                                            *
  *                                                                                                                                                  *
  * THE ISLAND. What the script needs and the markup does not show - the notebooks (id, path, sorted by path), the tag titles, the defaults (type,     *
  * notebook id, day start time) - travels in a <script type="application/json"> element, with every "<" written as < so no value can close it.  *
@@ -70,15 +74,21 @@ export interface FormView {
     inThisNoteDefault?: string
     // The line the Back link row would add (formModel.backlinkText), shown as the Add button's tooltip; empty or absent: no row (no note to link to).
     backlinkText?: string
-    // A test build's open timings (core/timing.ts, SHOW_OPEN_TIMINGS): the tap's time, the parts timed in the plugin, and when setHtml was called;
-    // the form's script adds how long the dialog took to show and writes the line under the heading. Absent or null: no line.
-    timing?: { start: number, parts: [string, number][], htmlAt: number } | null
+    // On mobile, the form's width in CSS pixels (core/platform.ts, formWidthOnMobile: from the screen, which the plugin's own webview reports as the
+    // dialog's does); absent or null: the form fills the dialog, which Joplin opens at 97% of the window and then sizes to it - the same width.
+    mobileWidth?: number | null
+    // A test build's open timings (core/timing.ts, SHOW_OPEN_TIMINGS): the tap's time, the parts timed in the plugin, when setHtml was called and the
+    // screen width the plugin saw; the form's script adds how long the dialog took to show and writes the line under the heading. Absent or null: no
+    // line.
+    timing?: { start: number, parts: [string, number][], htmlAt: number, screen?: number | null } | null
 }
 
 interface SegmentOption { value: string; label: string; title?: string }
 
 /** Imports *****************************************************************************************************************************************/
 const FormModel = require("./formModel")
+// form.css as text (webpack.config.js: CSS is imported as source), for the <style> element every form starts with.
+const FORM_CSS_SOURCE: string = require("./form.css")
 
 /** Constants ***************************************************************************************************************************************/
 // The chevron at the Notebook field's right edge, which opens the list: Material Design's "arrow_drop_down" glyph (Apache 2.0), inlined as the bell is.
@@ -87,6 +97,32 @@ const CHEVRON_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="curr
 const BELL_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true" focusable="false">'
     + '<path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 '
     + '5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>'
+
+/** FORM_CSS ****************************************************************************************************************************************
+ * The form's stylesheet as the markup carries it: form.css without its comments and with its whitespace collapsed (about 8 KB). Made once, when    *
+ * the plugin loads.                                                                                                                                *
+ ***************************************************************************************************************************************************/
+export function minifyCss(css: string): string {
+    return String(css || "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\s+/g, " ")
+        .replace(/\s*([{};,])\s*/g, "$1")
+        .replace(/;}/g, "}")
+        .trim()
+}
+
+export const FORM_CSS = minifyCss(FORM_CSS_SOURCE)
+
+/** mobileWrapperCss ********************************************************************************************************************************
+ * The phone's width rule, after form.css's 440px for the desktop: `width` CSS pixels when the host knows the screen, else the dialog's own width   *
+ * (auto: Joplin opens the dialog at 97% of the window, the wrapper fills it, and the measured width is that width again - nothing is taken off, so *
+ * it holds still, unlike 0.2.0's calc(100vw - 16px)). Never more than the desktop's 440px, nor than the dialog itself (100%, again with nothing     *
+ * taken off): a window narrower than the screen - split screen, a phone turned with the form open - would otherwise cut the form's right edge.     *
+ ***************************************************************************************************************************************************/
+export function mobileWrapperCss(width?: number | null): string {
+    const px = typeof width === "number" && isFinite(width) && width > 0 ? Math.round(width) + "px" : "auto"
+    return `#joplin-plugin-content{width:${px};max-width:min(440px,100%)}`
+}
 
 /** escapeHtml **************************************************************************************************************************************
  * Text for an element's content or a double-quoted attribute value.                                                                                *
@@ -156,8 +192,10 @@ export function buildFormHtml(view: FormView): string {
         inThisNote: choices.length ? { choices: choices, value: choice, fallback: fallback } : null,
         timing: view.timing || null,
     })
-    // A hidden marker on mobile only, as Cockpit's #cockpitPlatform: the script mirrors it onto #joplin-plugin-content as the jot-mobile class,
-    // which the narrow layout in form.css is gated on (never a viewport @media query, which would also match Joplin's measuring pass).
+    // The stylesheet first, so nothing below it is ever laid out without it; on mobile the phone's width rule after it.
+    const style = `<style id="jotFormStyle">${FORM_CSS}${view.mobile ? mobileWrapperCss(view.mobileWidth) : ""}</style>`
+    // A hidden marker on mobile only, as Cockpit's #cockpitPlatform. The narrow layout itself is the form's -mobile class, in this markup (never a
+    // viewport @media query, which would also match Joplin's measuring pass, and never a class the script adds once the dialog is already shown).
     const platformMarker = view.mobile ? '<div id="jotPlatform" hidden></div>' : ""
     // Note first, then To-do: the order of Cockpit's New note and New to-do buttons, and of Joplin's own.
     const typeRow = segmentRow("jotType", "type", "Type", [
@@ -186,9 +224,10 @@ export function buildFormHtml(view: FormView): string {
     const hint = view.mobile ? "" : `<span class="jot-hint" aria-hidden="true">Enter ${editing ? "saves" : "creates"} · Esc cancels</span>`
 
     return `
+        ${style}
         ${platformMarker}
         <script type="application/json" id="jotFormData">${island}</script>
-        <form name="jot" id="jotForm" class="jot-form${isNote ? " -note" : ""}" autocomplete="off">
+        <form name="jot" id="jotForm" class="jot-form${view.mobile ? " -mobile" : ""}${isNote ? " -note" : ""}" autocomplete="off">
             <div class="jot-head">
                 <strong id="jotHeading" class="jot-heading">${escapeHtml(FormModel.headingFor(type, mode))}</strong>${hint}
             </div>${view.timing ? '\n            <div id="jotTiming" class="jot-timing"></div>' : ""}${typeRow}

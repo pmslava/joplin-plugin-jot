@@ -16,6 +16,13 @@
  * form reads a notebook list that differs (registerNotebookChoices). A stored notebook that no longer exists falls back to the current one.          *
  *                                                                                                                                                  *
  * The keyboard shortcut is not a setting: the menu item carries an accelerator, so the command is listed under Options > Keyboard Shortcuts.        *
+ *                                                                                                                                                  *
+ * QUICK TO START, QUICK TO OPEN. On a phone each call to Joplin is a round trip, and while a sync runs and the other plugins start each one waited  *
+ * about two seconds (Jot's start took 26.6 s, 2026-10-14). So the section and the settings are registered together, everything the start and the  *
+ * form need is then read in ONE call (readStartupSettings: the form's settings, the toolbar gate, the 0.2.0 switches, the stored lists), and the    *
+ * form's settings are kept in memory from it. THE STORED LISTS (listCache, hidden): the notebooks and tag titles as Jot last read them, so a form   *
+ * opened right after the app starts, before the first read of the lists has come back, has them; plugin settings stay on the device (they are not *
+ * synced) and come back after a restart. Written only when a fresh read differs, and its own change notice is ignored (watchSettings).            *
  ***************************************************************************************************************************************************/
 
 /** Imports ****************************************************************************************************************************************/
@@ -41,6 +48,8 @@ export const SHOW_TOOLBAR_BUTTON_KEY = "showToolbarButton"
 export const SELECTION_ACTION_KEY = "selectionAction"
 export const TRIGGER_KEY = "trigger"
 export const TRIGGER_ACTION_KEY = "triggerAction"
+// The notebook and tag lists as last read, kept across restarts (see the README); hidden.
+export const LIST_CACHE_KEY = "listCache"
 
 export const TYPE_TODO = "todo"
 export const TYPE_NOTE = "note"
@@ -92,16 +101,40 @@ function notebookSettingSpecs(notebooks: { id: string, path: string }[]){
 // The notebook list the setting was last registered with, as a signature, so an unchanged list is not registered again.
 let registeredNotebooks: string | null = null
 
+// Settles once Jot's settings are registered (setupSettings): a setting read before that throws "Unknown key", and a notebook list registered
+// before it would be wiped by it.
+let registration: Promise<void> | null = null
+let markRegistered: () => void = () => undefined
+const registered = new Promise<void>(resolve => { markRegistered = resolve })
+
+export function settingsRegistered(): Promise<void> {
+    return registered
+}
+
 /** setupSettings ***********************************************************************************************************************************
- * Registers the section and its settings. Runs first in onStart, as the toolbar button's startup gate reads one of them.                           *
+ * Registers the section and its settings, both at once, then reads what the start needs in one call (readStartupSettings) and carries the 0.2.0     *
+ * switches over. Resolves that read: the toolbar gate and the stored lists. Never throws past a failed registration's warning.                   *
  ***************************************************************************************************************************************************/
-export async function setupSettings(){
-    await joplin.settings.registerSection(SECTION, {
+export interface StartupSettings {
+    showToolbarButton: boolean
+    storedLists: StoredLists | null
+}
+
+export async function setupSettings(): Promise<StartupSettings> {
+    if (!registration) registration = registerJotSettings().finally(() => markRegistered())
+    await registration
+    const startup = await readStartupSettings()
+    await migrateSettings(startup.raw)
+    return { showToolbarButton: startup.raw[SHOW_TOOLBAR_BUTTON_KEY] !== false, storedLists: parseStoredLists(startup.raw[LIST_CACHE_KEY]) }
+}
+
+async function registerJotSettings(): Promise<void> {
+    const section = joplin.settings.registerSection(SECTION, {
         label: "Jot",
         iconName: "fas fa-feather-alt",
         description: "Quick capture of a note or to-do without leaving the one you are in.",
     })
-    await joplin.settings.registerSettings({
+    const settings = joplin.settings.registerSettings({
         [DEFAULT_TYPE_KEY]: {
             label: "What Jot creates",
             description: "Whether the form opens as a to-do or a note. You can switch in the form.",
@@ -244,24 +277,34 @@ export async function setupSettings(){
             public: false,
             section: SECTION,
         },
+        [LIST_CACHE_KEY]: {
+            label: "The notebooks and tags as Jot last read them (kept for the first form after a start)",
+            value: "",
+            type: SettingItemType.String,
+            public: false,
+            section: SECTION,
+        },
     })
-    await migrateSettings()
+    await Promise.all([section, settings])
 }
 
 /** migrateSettings *********************************************************************************************************************************
  * Carries 0.2.0's two switches over to their three-way successors once (issue 6): tags switched off becomes Never, a back link switched on becomes   *
  * Always. Each old switch is then put back to its default, so the carry-over happens once and never overrides a later choice. Nothing is written   *
- * on an install that never touched them, which gets the new defaults (tags for notes from text, no back link). Never throws.                      *
+ * on an install that never touched them, which gets the new defaults (tags for notes from text, no back link). The switches come from the startup  *
+ * read. Never throws.                                                                                                                              *
  ***************************************************************************************************************************************************/
-async function migrateSettings(){
+async function migrateSettings(raw: Record<string, unknown>){
     try {
-        if ((await joplin.settings.value(OLD_COPY_TAGS_KEY)) === false){
+        if (raw[OLD_COPY_TAGS_KEY] === false){
             await joplin.settings.setValue(TAGS_FROM_KEY, FOR_NEVER)
             await joplin.settings.setValue(OLD_COPY_TAGS_KEY, true)
+            formSettingsCache = null
         }
-        if ((await joplin.settings.value(OLD_BACKLINK_KEY)) === true){
+        if (raw[OLD_BACKLINK_KEY] === true){
             await joplin.settings.setValue(BACKLINK_FOR_KEY, FOR_ALWAYS)
             await joplin.settings.setValue(OLD_BACKLINK_KEY, false)
+            formSettingsCache = null
         }
     } catch (error) {
         console.warn("Jot: could not carry the 0.2.0 tag and back link settings over", error)
@@ -338,15 +381,18 @@ export interface FormSettings {
     triggerAction: string
 }
 
-async function readFormSettingValues(): Promise<Record<string, unknown>> {
+// What the start reads besides the form's settings: the toolbar gate, the 0.2.0 switches and the stored lists.
+const STARTUP_SETTING_KEYS = [...FORM_SETTING_KEYS, SHOW_TOOLBAR_BUTTON_KEY, OLD_COPY_TAGS_KEY, OLD_BACKLINK_KEY, LIST_CACHE_KEY]
+
+async function readSettingValues(keys: string[]): Promise<Record<string, unknown>> {
     try {
-        const values = await joplin.settings.values(FORM_SETTING_KEYS)
+        const values = await joplin.settings.values(keys)
         if (values && typeof values === "object") return values
     } catch (error) {
         // An app without settings.values: one read each, below.
     }
     const values: Record<string, unknown> = {}
-    for (const key of FORM_SETTING_KEYS){
+    for (const key of keys){
         try {
             values[key] = await joplin.settings.value(key)
         } catch (error) {
@@ -357,35 +403,65 @@ async function readFormSettingValues(): Promise<Record<string, unknown>> {
 }
 
 // The form's settings as last read, kept in memory: an open makes no call for them. Any change to a setting forgets them (watchSettings), and the
-// next open, or the warm-up, reads them again. On a phone during or just after a sync, one settings call was measured at 2.9 to 12.5 s. Joplin
-// tells plugins of a change a second after the last one (Setting.scheduleChangeEvent, 3.7.21), so a form opened within that second still starts
-// on the old values; the next open has the new ones.
+// next open reads them again. On a phone during or just after a sync, one settings call was measured at 2.9 to 12.5 s. Joplin tells plugins of a
+// change a second after the last one (Setting.scheduleChangeEvent, 3.7.21), so a form opened within that second still starts on the old values;
+// the next open has the new ones.
 let formSettingsCache: FormSettings | null = null
+// The start's read while it is on its way: a form opened meanwhile waits for it rather than asking again.
+let startupRead: Promise<unknown> | null = null
 
 export async function getFormSettings(): Promise<FormSettings> {
     if (formSettingsCache) return formSettingsCache
-    const read = await readFormSettings()
+    if (startupRead){
+        await startupRead.catch(() => undefined)
+        if (formSettingsCache) return formSettingsCache
+    }
+    await settingsRegistered()
+    const read = normalizeFormSettings(await readSettingValues(FORM_SETTING_KEYS))
     if (settingsWatched) formSettingsCache = read
     return read
 }
 
+/** readStartupSettings *****************************************************************************************************************************
+ * The start's one read (STARTUP_SETTING_KEYS), sent together with the change listener (watchSettings, sent first, so no change can fall between    *
+ * the two): the form's settings are kept from it, and the rest goes back to setupSettings. Never throws: an unreadable key is undefined.          *
+ ***************************************************************************************************************************************************/
+async function readStartupSettings(): Promise<{ raw: Record<string, unknown> }> {
+    const read = (async () => {
+        const [, raw] = await Promise.all([watchSettings(), readSettingValues(STARTUP_SETTING_KEYS)])
+        if (settingsWatched) formSettingsCache = normalizeFormSettings(raw)
+        return { raw }
+    })()
+    startupRead = read
+    try {
+        return await read
+    } finally {
+        startupRead = null
+    }
+}
+
 /** watchSettings ***********************************************************************************************************************************
  * Forgets the form's settings whenever one changes (the Settings screen, a sync of settings, Jot's own carry-over), so the next open reads them     *
- * again. Never throws: an app that cannot report changes leaves the cache off, and every open reads the settings.                                  *
+ * again - except when the only key that changed is the stored lists, which Jot writes itself after reading the lists. Never throws: an app that    *
+ * cannot report changes leaves the cache off, and every open reads the settings.                                                                   *
  ***************************************************************************************************************************************************/
 let settingsWatched = false
 
 export async function watchSettings(): Promise<void> {
+    if (settingsWatched) return
     try {
-        await joplin.settings.onChange(() => { formSettingsCache = null })
+        await joplin.settings.onChange((event: any) => {
+            const keys = event && Array.isArray(event.keys) ? event.keys : null
+            if (keys && keys.length && keys.every((key: unknown) => key === LIST_CACHE_KEY)) return
+            formSettingsCache = null
+        })
         settingsWatched = true
     } catch (error) {
         console.warn("Jot: could not follow setting changes; the form reads its settings on every open", error)
     }
 }
 
-async function readFormSettings(): Promise<FormSettings> {
-    const raw = await readFormSettingValues()
+function normalizeFormSettings(raw: Record<string, unknown>): FormSettings {
     const open = raw[OPEN_AFTER_CREATE_KEY]
     return {
         defaultType: raw[DEFAULT_TYPE_KEY] === TYPE_NOTE ? TYPE_NOTE : TYPE_TODO,
@@ -409,6 +485,57 @@ export function settingsCacheable(): boolean {
     return settingsWatched
 }
 
+/** The stored lists ********************************************************************************************************************************
+ * The notebooks ({ id, title, parent_id }) and the tag titles as Jot last read them, in one hidden setting (see the README), as compact JSON:        *
+ * { v: 1, f: [[id, parent_id, title], ...], t: [title, ...] }. parseStoredLists reads it back (null for anything else: never stored, another       *
+ * version, damaged); storeLists writes a fresh read when it differs from what is stored, in the background. Never throw.                           *
+ ***************************************************************************************************************************************************/
+export interface StoredLists {
+    folders: { id: string, title: string, parent_id: string }[]
+    tags: { id: string, title: string }[]
+}
+
+const STORED_LISTS_VERSION = 1
+// The stored value as last read or written, so an unchanged list is not written again.
+let storedListsText: string | null = null
+
+export function parseStoredLists(raw: unknown): StoredLists | null {
+    if (typeof raw !== "string" || !raw) return null
+    try {
+        const data = JSON.parse(raw)
+        if (!data || data.v !== STORED_LISTS_VERSION || !Array.isArray(data.f) || !Array.isArray(data.t)) return null
+        const folders = data.f
+            .filter((row: unknown) => Array.isArray(row) && typeof row[0] === "string" && row[0])
+            .map((row: any[]) => ({ id: row[0], parent_id: typeof row[1] === "string" ? row[1] : "", title: typeof row[2] === "string" ? row[2] : "" }))
+        // The form needs only the tag titles (Create reads the tags afresh to attach them), so the ids are not kept.
+        const tags = data.t.filter((title: unknown) => typeof title === "string" && title).map((title: string) => ({ id: "", title }))
+        if (!folders.length) return null
+        storedListsText = raw
+        return { folders, tags }
+    } catch (error) {
+        return null
+    }
+}
+
+export function storedListsValue(folders: any[], tags: any[]): string {
+    return JSON.stringify({
+        v: STORED_LISTS_VERSION,
+        f: folders.filter(folder => folder && folder.id).map(folder => [String(folder.id), String(folder.parent_id || ""), String(folder.title || "")]),
+        t: tags.map(tag => String((tag && tag.title) || "")).filter(title => !!title),
+    })
+}
+
+export async function storeLists(folders: any[], tags: any[]): Promise<void> {
+    const value = storedListsValue(folders, tags)
+    if (value === storedListsText) return
+    try {
+        await joplin.settings.setValue(LIST_CACHE_KEY, value)
+        storedListsText = value
+    } catch (error) {
+        console.warn("Jot: could not keep the notebook and tag lists for the next start", error)
+    }
+}
+
 /** registerNotebookChoices *************************************************************************************************************************
  * Registers the two notebook settings again with `notebooks` ({ id, path }, sorted) as their options, when they differ from the list registered last. *
  * stored value is kept (see the README). Never throws: a refusal is a console warning, and the setting keeps its last options.                     *
@@ -429,13 +556,6 @@ export async function registerNotebookChoices(notebooks: { id: string, path: str
  ***************************************************************************************************************************************************/
 export async function getDayStartTime(){
     return String((await joplin.settings.value(DAY_START_TIME_KEY)) || "")
-}
-
-/** isToolbarButtonEnabled **************************************************************************************************************************
- * Whether the note toolbar button is created at startup (Cockpit's gate: toolbar buttons can only be added while the plugin starts).               *
- ***************************************************************************************************************************************************/
-export async function isToolbarButtonEnabled(){
-    return (await joplin.settings.value(SHOW_TOOLBAR_BUTTON_KEY)) !== false
 }
 
 /** getSelectionAction / getTriggerAction **********************************************************************************************************

@@ -7,8 +7,8 @@ import { callPluginCommand, createNotebook, dataApiSettings } from './helpers';
  * (PluginDialogWebView.tsx, every 500 ms) and on desktop alike (useContentSize, live) - and the webview inside is the dialog's width, so a content
  * width taken from the viewport shrinks the dialog at every measurement: the bug seen on Android in 0.2.0, where the mobile rule was
  * calc(100vw - 16px). Desktop's host closes the same loop, so this spec reproduces it here: it switches the open form to its mobile layout (the
- * #jotPlatform marker, as the mobile markup carries it) with the screen reported as a 412px phone, and samples the dialog's width. First the old
- * rule, to show the loop is real; then the fix, which must hold still at 94% of the screen.
+ * -mobile class and the pixel width rule, as the mobile markup carries them for a 412px screen) and samples the dialog's width: the fix, which must
+ * hold still at 94% of the screen; then the old rule, to show the loop is real.
  */
 test.describe('The mobile width (the loop reproduced on desktop)', () => {
   let joplin: JoplinInstance;
@@ -57,13 +57,14 @@ test.describe('The mobile width (the loop reproduced on desktop)', () => {
     const before = await dialogWidth(win);
     expect(before).toBeGreaterThan(400);
 
-    // The fix: the mobile marker, as the mobile markup carries it, with the screen reported as a 412px phone. formWebview.js's own mobile switch
-    // (run by its mutation observer) takes the width from the screen: 94% of 412 is 387, and it must hold still while Joplin keeps measuring.
+    // The fix, as the mobile markup carries it since 0.2.3: the form's -mobile class and, after form.css in the markup's own <style>, the phone's
+    // width in pixels, which the plugin makes from the screen (core/platform.ts formWidthOnMobile; formHtml.ts mobileWrapperCss): 94% of a 412px
+    // screen is 387. Nothing is left for the script to set once the dialog shows, and the width must hold still while Joplin keeps measuring.
     await form.evaluate(() => {
-      Object.defineProperty(window.screen, 'width', { configurable: true, get: () => 412 });
-      document.body.insertAdjacentHTML('afterbegin', '<div id="jotPlatform" hidden></div>');
+      document.getElementById('jotForm')!.classList.add('-mobile');
+      document.getElementById('jotFormStyle')!.textContent += '#joplin-plugin-content{width:387px;max-width:min(440px,100%)}';
     });
-    await expect.poll(async () => form.evaluate(() => document.getElementById('joplin-plugin-content')!.style.width), { timeout: 10_000 }).toBe('387px');
+    await expect.poll(async () => form.evaluate(() => getComputedStyle(document.getElementById('joplin-plugin-content')!).width), { timeout: 10_000 }).toBe('387px');
     await win.waitForTimeout(1000);
     const steady = await samples(win, 8);
     console.log(`[jot-e2e] desktop: ${before}; fixed mobile: ${steady.join(', ')}`);

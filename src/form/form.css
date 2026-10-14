@@ -1,26 +1,32 @@
 /* Jot's form dialog (brief 4.1, 4.2): one column, 440px on desktop; on mobile the column takes the screen's width
  * instead. The picker section is Cockpit's set alarm dialog CSS (src/ui/alarm/alarm.ts, dialogCss), with its
- * multi-to-do rows dropped and its .cockpit-mobile gate renamed .jot-mobile.
+ * multi-to-do rows dropped and its .cockpit-mobile gate renamed to the form's -mobile class.
  *
- * The standing rules for a plugin dialog (brief section 9) bind this file: pixel sizes, no @media rule (a viewport
- * query inside a webview whose size comes from its own content is circular, and it would also match Joplin's ~200px
- * measuring pass), and suggestion lists taken out of the flow so they never change the dialog's size.
+ * THIS FILE IS PART OF THE MARKUP. formHtml.ts puts it, minified, in a <style> element at the top of every form it
+ * builds, and it is not added to the dialog as a script file. Joplin takes the dialog's size from the markup the
+ * moment the page has it, before any file it is told to load has arrived, and on a busy phone it measures again only
+ * seconds later: a stylesheet that came as a file made the form open at its unstyled size and then change size and
+ * shape while the user was already typing (Android, 2026-10-14). So everything that decides the form's size is here or
+ * in the markup - the platform's layout (the -mobile class on the form), the width on mobile (formHtml.ts, from the
+ * screen) - and the script changes no size when it runs.
+ *
+ * The standing rules for a plugin dialog (brief section 9) bind this file: sizes in pixels or in em of the form's own
+ * font, no @media rule (a viewport query inside a webview whose size comes from its own content is circular, and it
+ * would also match Joplin's ~200px measuring pass), and suggestion lists taken out of the flow so they never change
+ * the dialog's size.
  *
  * Every colour comes from Joplin's theme variables, with a neutral fallback, so the form reads in every theme. Every
- * control is one height (28px) and one radius, the labels share one column, and a selected segment changes its
- * background and colour but never its weight, so choosing never makes a row jump. */
+ * control is one height (28px, or one line of the form's font and its padding when that is taller: a phone's 16px)
+ * and one radius, the labels share one column, and a selected segment changes its background and colour but never its
+ * weight, so choosing never makes a row jump. */
 
 /* Joplin sizes a fit-to-content dialog from this wrapper's bounding rect, but the wrapper stretches to the iframe,
- * which starts at a 200px minimum - so the wrapper's width is the one way to say how wide the dialog is. */
+ * which starts at a 200px minimum - so the wrapper's width is the one way to say how wide the dialog is. On mobile the
+ * markup's own <style> follows this one with the phone's width (formHtml.ts, mobileWrapperCss): in pixels from the
+ * screen, never from the viewport - 100vw is the dialog's own width on mobile, and Joplin sizes the dialog to the
+ * content, so a width taken from it shrinks the dialog at every measurement. */
 #joplin-plugin-content {
     width: 440px;
-}
-/* The narrow layout is gated on the jot-mobile class, which formWebview.js puts on the wrapper only when the markup
- * carries the #jotPlatform marker (mobile), never on a viewport query (see above). Its width is set there too, in pixels
- * from the screen (jotMobileWidth): never from the viewport - 100vw is the dialog's own width on mobile, and Joplin sizes
- * the dialog to the content, so a width taken from it shrinks the dialog at every measurement. */
-#joplin-plugin-content.jot-mobile {
-    max-width: 440px;
 }
 
 /* Anything with a display rule of its own still hides when the script sets [hidden]. */
@@ -34,7 +40,9 @@
     --jot-focus: var(--joplin-focus-outline-color, var(--joplin-url-color, #2D6BDC));
     --jot-hover: rgba(127, 127, 127, 0.14);
     --jot-selected: var(--joplin-selected-color, rgba(127, 127, 127, 0.3));
-    --jot-control: 28px;
+    /* One line of the form's font and the controls' padding and border, never under 28px: 28px at the desktop's 12 and
+     * 13px, 31.6px at a phone's 16px, where 28px clipped the line. In em, so it is resolved where it is used. */
+    --jot-control: max(28px, calc(1.35em + 10px));
     --jot-radius: 4px;
     position: relative;
     display: flex;
@@ -43,8 +51,17 @@
     padding: 2px 2px 4px;
     width: 100%;
     box-sizing: border-box;
-    font-size: var(--joplin-font-size, 13px);
+    /* The fallbacks are the themes' own values - desktop 12px Roboto (3.6.14 and 3.7.21), mobile 16px below - so the
+     * form has its final size whether or not Joplin's theme variables are in when the dialog is first measured: on
+     * desktop they come as a file of their own, after the markup, and a 13px fallback made the form shrink 2px then. */
+    font-size: var(--joplin-font-size, 12px);
+    font-family: var(--joplin-font-family, Roboto, sans-serif);
     line-height: 1.35;
+}
+/* Mobile's theme font is 16px (app-mobile global-style.ts): the fallback is the same, so the form has its final size
+ * whether or not Joplin's theme variables are in when the dialog is first measured. */
+.jot-form.-mobile {
+    font-size: var(--joplin-font-size, 16px);
 }
 .jot-head {
     display: flex;
@@ -62,6 +79,9 @@
     letter-spacing: 0.01em;
 }
 .jot-timing {
+    /* A test build's line (core/timing.ts): two lines kept for it from the start, so filling it moves nothing. */
+    height: calc(2 * 1.35em);
+    overflow: hidden;
     font-size: 0.82em;
     opacity: 0.7;
     font-variant-numeric: tabular-nums;
@@ -156,19 +176,33 @@
     opacity: 1;
 }
 #jotBody {
-    /* Three lines, fixed: a draggable resize handle would make the centred dialog jump as it grows. */
-    height: 66px;
+    /* Three lines, fixed: a draggable resize handle would make the centred dialog jump as it grows. 66px at the
+     * desktop's font, three lines of a phone's 16px and the padding there. */
+    height: max(66px, calc(3 * 1.35em + 11px));
     padding-top: 5px;
     resize: none;
 }
 /* Title and Tags grow with what they hold: one line, then two, then three, and past three they scroll, the scrollbar
- * saying there is more (issue 4). formWebview.js sets the height (sizeJotGrow); this is their one-line start, before the
- * script has run. They are textareas only so they can wrap: Enter never makes a new line in them. */
+ * saying there is more (issue 4). Where the browser sizes a field to its content (field-sizing, Chromium 123: Joplin's
+ * Electron and the phones' WebViews of 2025 on), the CSS does it all, so a long title or the tags of the note you are
+ * in have their height in the very first layout; the width comes from the row (flex-basis 0), never from the text.
+ * Elsewhere formWebview.js sets the height (sizeJotGrow) and this is the one-line start. They are textareas only so
+ * they can wrap: Enter never makes a new line in them. */
 textarea.jot-grow {
     height: var(--jot-control);
     resize: none;
     overflow-y: hidden;
     overflow-wrap: anywhere;
+}
+@supports (field-sizing: content) {
+    textarea.jot-grow {
+        field-sizing: content;
+        flex-basis: 0;
+        height: auto;
+        min-height: var(--jot-control);
+        max-height: calc(3 * 1.35em + 10px);
+        overflow-y: auto;
+    }
 }
 
 /* The selectors - Type, In this note, Back link, Open: one line of segments that act as radios. A group takes the width
@@ -231,6 +265,9 @@ textarea.jot-grow {
     text-overflow: ellipsis;
 }
 .jot-bell {
+    /* A button keeps the browser's small control font unless told: the form's, so --jot-control's em is the form's. */
+    font-family: inherit;
+    font-size: inherit;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -275,10 +312,10 @@ textarea.jot-grow {
 }
 
 /* Mobile: a narrower label column, so the fields keep their width on a phone. */
-.jot-mobile .jot-label {
+.jot-form.-mobile .jot-label {
     flex-basis: 72px;
 }
-.jot-mobile .jot-seg-option {
+.jot-form.-mobile .jot-seg-option {
     padding: 0 9px;
 }
 
@@ -335,13 +372,13 @@ textarea.jot-input::-webkit-scrollbar-thumb,
     padding-top: 2px;
 }
 /* Calendar on top, the hour/minute columns below it (mobile only, as in Cockpit) */
-.jot-mobile #alarmBody {
+.jot-form.-mobile #alarmBody {
     flex-direction: column;
 }
-.jot-mobile #alarmTimePanel {
+.jot-form.-mobile #alarmTimePanel {
     justify-content: center;
 }
-.jot-mobile .alarm-time-col {
+.jot-form.-mobile .alarm-time-col {
     /* Compact (~4-5 rows) so a stacked column under the calendar does not make a very tall dialog; the hour and
      * minute lists share the full width instead of 46px each. */
     height: 132px;

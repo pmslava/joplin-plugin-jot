@@ -19,8 +19,8 @@
  * left to the host, which cancels the form. Enter in the Text is a newline, which the host does not touch.                                         *
  ***************************************************************************************************************************************************/
 
-// When this script began to run: on a phone each open is a fresh webview, so this is when the dialog's page was ready for it (the timing line's
-// "webview" part); on desktop the webview stays and this is long before the open.
+// When this script began to run: each open is a fresh webview (mobile 3.7.8, and desktop 3.7.21 mounts a new frame per open too), so this is when
+// the dialog's page was ready for it (the timing line's "webview" part).
 var jotScriptStart = Date.now()
 
 /** State of the current open **********************************************************************************************************************/
@@ -714,30 +714,11 @@ function scrollAlarmColumn(column, index, total){
     column.scrollTop = Math.max(0, (column.scrollHeight * index / total) - (column.clientHeight / 2))
 }
 
-/** applyJotPlatformClass **************************************************************************************************************************
- * On mobile the markup carries the #jotPlatform marker; mirror it onto the persistent #joplin-plugin-content wrapper as the jot-mobile class, which   *
- * the narrow layout in form.css is gated on. Add-only and gated on the marker, so on desktop the wrapper is never touched (Cockpit's pattern).        *
+/** The platform's layout ***************************************************************************************************************************
+ * Nothing to do here any more. The narrow layout is the form's -mobile class and the phone's width a rule in the markup's own <style>, both written  *
+ * by the host (formHtml.ts, from the screen: core/platform.ts formWidthOnMobile), so the dialog has them in its first layout. This script used to   *
+ * add both once it ran, which on a busy phone was after Joplin had already shown the dialog at its unstyled size.                                  *
  ***************************************************************************************************************************************************/
-function applyJotPlatformClass(){
-    if (!jotById('jotPlatform')) return
-    var wrapper = jotById('joplin-plugin-content')
-    if (!wrapper) return
-    wrapper.classList.add('jot-mobile')
-    wrapper.style.width = jotMobileWidth() + 'px'
-}
-
-/** jotMobileWidth **********************************************************************************************************************************
- * The form's width on mobile, from the SCREEN, never from the viewport. Joplin mobile sizes a fit-to-content dialog to its content's measured width  *
- * (PluginDialogWebView.tsx, re-measured every 500 ms by useDialogSize, capped at 97% of the window), and the webview inside the dialog is the        *
- * dialog's width - so a width taken from the viewport (it was calc(100vw - 16px)) made the content 16px narrower than the dialog, the dialog then   *
- * 16px narrower, and so on at every measurement: the form shrank on the phone until it was a sliver. The screen's width does not change with the     *
- * dialog, so this is measured once per layout and holds still: 94% of it (inside Joplin's 97% cap), at most the desktop's 440px, at least 240px.    *
- ***************************************************************************************************************************************************/
-function jotMobileWidth(){
-    var screenWidth = window.screen && Number(window.screen.width)
-    if (!screenWidth || !isFinite(screenWidth)) screenWidth = 360
-    return Math.max(240, Math.min(440, Math.floor(screenWidth * 0.94)))
-}
 
 /** Enter with no title ****************************************************************************************************************************
  * Joplin submits the form on Enter in any text input (its own keydown listener on the dialog's document, in the bubble phase). With the Title empty  *
@@ -798,10 +779,10 @@ function onJotWindowKeyDown(event){
 
 /** Title and Tags: growing fields ******************************************************************************************************************
  * Issue 4: a long title or a long list of tags (the note you are in can bring a dozen) was hidden past the field's edge. Title and Tags are         *
- * textareas of one row that grow with what they hold, to three lines; past three they scroll, and the scrollbar says there is more. sizeJotGrow      *
- * measures the content at the one-line height and sets the height, capped; the dialog grows with it (Joplin measures it live), as it does when the *
- * picker unfolds - and nothing here depends on the dialog's own size, so it cannot feed back (the Android width loop of 0.2.0). A tag list open      *
- * under Tags follows it.                                                                                                                            *
+ * textareas of one row that grow with what they hold, to three lines; past three they scroll, and the scrollbar says there is more. Where the       *
+ * browser sizes a field to its content (field-sizing, form.css) the CSS does it, from the first layout, and sizeJotGrow only moves an open tag list *
+ * along; elsewhere sizeJotGrow measures the content at the one-line height and sets the height, capped. Either way the dialog grows with it, as it   *
+ * does when the picker unfolds - and nothing here depends on the dialog's own size, so it cannot feed back (the Android width loop of 0.2.0).      *
  *                                                                                                                                                  *
  * They stay one-line fields in every other way: Enter never makes a new line (onJotFormKeyDown), a pasted line break becomes a space (a title or a  *
  * tag has none; the browser hands a textarea's value over with \n only, so the swap keeps the caret where it was), and the keyboard puts the caret   *
@@ -814,8 +795,22 @@ function isJotGrow(element){
     return !!(element && element.tagName === 'TEXTAREA' && element.classList && element.classList.contains('jot-grow'))
 }
 
+// Whether the browser sizes Title and Tags itself (form.css's @supports rule).
+function jotFieldSizing(){
+    try {
+        return !!(window.CSS && typeof window.CSS.supports === 'function' && window.CSS.supports('field-sizing', 'content'))
+    } catch (error){
+        return false
+    }
+}
+
 function sizeJotGrow(field){
-    if (!field || !field.style || typeof window.getComputedStyle !== 'function') return
+    if (!field || !field.style) return
+    if (jotFieldSizing()){
+        if (jotSuggest && jotSuggest.input === field) placeJotSuggest(field, jotSuggest.list)
+        return
+    }
+    if (typeof window.getComputedStyle !== 'function') return
     var style = window.getComputedStyle(field)
     var borders = (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0)
     var padding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0)
@@ -870,7 +865,9 @@ function jotCaretToEnd(field){
 
 /** showJotTiming **********************************************************************************************************************************
  * A test build's line under the heading (core/timing.ts): from the tap to this script running, then each part - the plugin's (selection,         *
- * settings, lists, form, dialog) and the dialog showing itself, from setHtml to now. Both clocks are the device's wall clock.                       *
+ * settings, lists, form, dialog) and the dialog showing itself, from setHtml to now - and the screen width the plugin saw beside the one this page *
+ * sees (the phone's form width is made from the first). Both clocks are the device's wall clock. The line's two lines are reserved in form.css, so  *
+ * filling it moves nothing.                                                                                                                        *
  ***************************************************************************************************************************************************/
 function showJotTiming(){
     var line = jotById('jotTiming')
@@ -883,14 +880,37 @@ function showJotTiming(){
     var scriptAt = Math.max(jotScriptStart, timing.htmlAt)
     parts.push('webview ' + seconds(scriptAt - timing.htmlAt))
     parts.push('setup ' + seconds(now - scriptAt))
+    var pageScreen = window.screen && window.screen.width
+    parts.push('screen ' + (timing.screen || '?') + '/' + (pageScreen || '?'))
     line.textContent = 'Opened in ' + seconds(now - timing.start) + ' s: ' + parts.join(', ')
 }
 
 /** focusJotTitle **********************************************************************************************************************************
- * The Title has the focus on open, so typing goes there, Enter creates and Shift+Tab reaches the Type toggle. autofocus in the markup only counts     *
- * while a document is parsing, and this markup arrives later, so the focus is given here - and once more when the dialog's frame itself receives the *
- * focus (Joplin focuses it when the dialog is ready), in case that came after.                                                                       *
+ * The Title has the focus on open, so typing goes there, Enter creates and Shift+Tab reaches the Type toggle. On desktop the markup arrives through  *
+ * innerHTML, where autofocus does nothing, so the focus is given here - and once more when the dialog's frame itself receives the focus (Joplin     *
+ * focuses it when the dialog is ready), in case that came after. On a phone the markup is the page itself, autofocus has already put the focus on   *
+ * the Title, and the user may be typing - in the Title or anywhere else - by the time this script runs on a busy phone: then the focus and the      *
+ * caret are left where they are (focusJotTitleAtStart).                                                                                            *
  ***************************************************************************************************************************************************/
+function jotNothingFocused(){
+    var active = document.activeElement
+    return !active || active === document.body || active === document.documentElement
+}
+
+function focusJotTitleAtStart(){
+    var title = jotById('jotTitle')
+    if (!title) return
+    if (jotNothingFocused()){
+        focusJotTitle()
+        return
+    }
+    // Focused by autofocus and not touched yet (its text as written, the caret where autofocus leaves it): the caret goes to the end, as above.
+    if (document.activeElement === title && title.value === title.defaultValue && title.selectionStart === 0 && title.selectionEnd === 0){
+        var end = title.value.length
+        try { title.setSelectionRange(end, end) } catch (error){}
+    }
+}
+
 function focusJotTitle(){
     var title = jotById('jotTitle')
     if (!title) return
@@ -909,7 +929,6 @@ function onJotWindowFocus(){
  * Wires one freshly written form, exactly once (the data-jot-ready marker on the form element, so a reopen - a new form element - is wired again).  *
  ***************************************************************************************************************************************************/
 function initJotFormIfNeeded(){
-    applyJotPlatformClass()
     var form = jotForm()
     if (!form || form.getAttribute('data-jot-ready') === '1') return
     if (!window.FormModel){
@@ -973,7 +992,7 @@ function initJotFormIfNeeded(){
     writeJotDue(due.date, due.time)
     renderAlarmCalendar()
     if (!jotById('jotPicker').hasAttribute('hidden')) setJotPickerOpen(true)
-    focusJotTitle()
+    focusJotTitleAtStart()
     showJotTiming()
 }
 

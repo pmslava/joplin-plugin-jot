@@ -63,7 +63,8 @@ test.describe('Growing Title and Tags, and the In this note defaults (desktop)',
     const style = getComputedStyle(element);
     return {
       value: element.value, height: element.getBoundingClientRect().height, lines: Math.round((element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)) / parseFloat(style.lineHeight)),
-      overflowY: element.style.overflowY, scrollable: element.scrollHeight > element.clientHeight + 1, start: element.selectionStart, end: element.selectionEnd,
+      // Computed, not inline: since 0.2.3 the CSS sizes the field (field-sizing: content) and the script writes no height or overflow.
+      overflowY: style.overflowY, scrollable: element.scrollHeight > element.clientHeight + 1, start: element.selectionStart, end: element.selectionEnd,
       active: document.activeElement === element,
     };
   }, id);
@@ -126,7 +127,7 @@ test.describe('Growing Title and Tags, and the In this note defaults (desktop)',
     await form.locator('#jotTitle').fill(long);
     const two = await field(form, 'jotTitle');
     expect(two.lines).toBeGreaterThanOrEqual(2);
-    expect(two.overflowY).toBe('hidden');
+    expect(two.scrollable).toBe(false);
     await form.locator('#jotTitle').fill(`First line\nsecond line ${stamp}`);
     expect((await field(form, 'jotTitle')).value).toBe(`First line second line ${stamp}`);
     await form.locator('#jotTitle').press('End');

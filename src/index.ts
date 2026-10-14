@@ -25,8 +25,8 @@
 import joplin from 'api'
 import { MenuItemLocation, ToolbarButtonLocation } from 'api/types'
 import { isMobile } from './core/platform'
-import { isToolbarButtonEnabled, setupSettings } from './core/settings'
-import { openEditFromCommand, openJot, refreshLists, runOpenCommand, warmUp } from './form/form'
+import { setupSettings } from './core/settings'
+import { adoptStoredLists, openEditFromCommand, openJot, refreshLists, runOpenCommand, warmUp } from './form/form'
 import { setupTrigger } from './trigger'
 
 /** Constants ***************************************************************************************************************************************/
@@ -52,20 +52,29 @@ const ICON = 'fas fa-feather-alt'
 joplin.plugins.register({ onStart: setupPlugin })
 
 /** setupPlugin *************************************************************************************************************************************
- * Runs everything that initializes the plugin. The settings come first (the toolbar gate reads one), then the commands, which the menu item and the *
- * toolbar button refer to by name, and last the typed trigger's content script and its message handler.                                           *
+ * Runs everything that initializes the plugin, in as few waits as the order allows: on a phone each call is a round trip, and while a sync runs    *
+ * and the other plugins start each one waited about two seconds (Jot's start took 26.6 s, one call after another, 2026-10-14). First, and never   *
+ * awaited, the warm-up: the form's dialog built, the notebook and tag lists read and the current note followed, none of which needs anything else *
+ * (warmUp). Then together: the settings (registered, then read in one call), the four commands, and the sync listener. Once the settings and the  *
+ * commands are in: the menu items and the toolbar button, which name the commands (a toolbar button made before its command breaks the phone's     *
+ * note menu) and need the toolbar gate, and the typed trigger's content script, whose first question is the trigger setting.                      *
  ***************************************************************************************************************************************************/
 export async function setupPlugin(){
-    await setupSettings()
-    await setupCommands()
-    await setupMenu()
-    await setupToolbar()
-    await setupTrigger()
-    // Once the rest is up, and never in the way of the start: the notebook and tag lists read (they also fill the notebook settings' dropdowns) and
-    // the form's dialog built, so the first open costs neither; and the lists read again after every sync, which can bring notebooks and tags.
     void warmUp()
+    const synced = followSyncs()
+    const commands = setupCommands()
+    const startup = await setupSettings()
+    adoptStoredLists(startup.storedLists)
+    await commands
+    await Promise.all([setupMenu(), setupToolbar(startup.showToolbarButton), setupTrigger(), synced])
+}
+
+/** followSyncs *************************************************************************************************************************************
+ * The lists read again after every sync, which can bring notebooks and tags.                                                                       *
+ ***************************************************************************************************************************************************/
+async function followSyncs(){
     try {
-        await joplin.workspace.onSyncComplete(() => { void refreshLists() })
+        await joplin.workspace.onSyncComplete(() => { void refreshLists(true) })
     } catch (error) {
         console.warn("Jot: could not follow syncs; the notebook and tag lists are read after each form instead", error)
     }
@@ -80,30 +89,33 @@ export async function setupPlugin(){
  * promises jot.open's callers.                                                                                                                     *
  ***************************************************************************************************************************************************/
 async function setupCommands(){
-    await joplin.commands.register({
-        name: OPEN_COMMAND,
-        label: 'Jot…',
-        iconName: ICON,
-        execute: async (args?: unknown) => runOpenCommand(args),
-    })
-    await joplin.commands.register({
-        name: SELECTION_COMMAND,
-        label: 'Jot from the selection…',
-        iconName: ICON,
-        execute: async () => openJot('contextMenu'),
-    })
-    await joplin.commands.register({
-        name: BUTTON_COMMAND,
-        label: 'Jot',
-        iconName: ICON,
-        execute: async () => openJot('button'),
-    })
-    await joplin.commands.register({
-        name: EDIT_COMMAND,
-        label: 'Edit with Jot…',
-        iconName: ICON,
-        execute: async (noteIds?: unknown) => openEditFromCommand(noteIds),
-    })
+    // All four at once: each is declared the moment Joplin receives it, in the order sent.
+    await Promise.all([
+        joplin.commands.register({
+            name: OPEN_COMMAND,
+            label: 'Jot…',
+            iconName: ICON,
+            execute: async (args?: unknown) => runOpenCommand(args),
+        }),
+        joplin.commands.register({
+            name: SELECTION_COMMAND,
+            label: 'Jot from the selection…',
+            iconName: ICON,
+            execute: async () => openJot('contextMenu'),
+        }),
+        joplin.commands.register({
+            name: BUTTON_COMMAND,
+            label: 'Jot',
+            iconName: ICON,
+            execute: async () => openJot('button'),
+        }),
+        joplin.commands.register({
+            name: EDIT_COMMAND,
+            label: 'Edit with Jot…',
+            iconName: ICON,
+            execute: async (noteIds?: unknown) => openEditFromCommand(noteIds),
+        }),
+    ])
 }
 
 /** setupMenu ***************************************************************************************************************************************
@@ -114,34 +126,36 @@ async function setupCommands(){
  *                                                                                                                                                  *
  * Menus are a desktop only part of the plugin API, so the items are not made on mobile (detected as Cockpit does, core/platform.ts), and each call  *
  * is guarded on its own: an app that refuses one must not stop the plugin from starting, nor cost the other item, since the commands stay          *
- * reachable from the palette, the shortcut and other plugins.                                                                                     *
+ * reachable from the palette, the shortcut and other plugins. The three are sent together, in this order.                                         *
  ***************************************************************************************************************************************************/
 async function setupMenu(){
     if (await isMobile()) return
+    await Promise.all([
+        menuItem(() => joplin.views.menuItems.create(OPEN_MENU_ITEM, OPEN_COMMAND, MenuItemLocation.Tools, { accelerator: OPEN_ACCELERATOR }),
+            "Jot: could not add Tools > Jot… (menus do not exist on mobile)"),
+        menuItem(() => joplin.views.menuItems.create(SELECTION_MENU_ITEM, SELECTION_COMMAND, MenuItemLocation.EditorContextMenu),
+            "Jot: could not add Jot from the selection… to the editor's right-click menu"),
+        menuItem(() => joplin.views.menuItems.create(EDIT_MENU_ITEM, EDIT_COMMAND, MenuItemLocation.NoteListContextMenu),
+            "Jot: could not add Edit with Jot… to the note list's right-click menu"),
+    ])
+}
+
+// One menu item's creation, its refusal a console warning: started at once, so the three are sent together.
+async function menuItem(create: () => Promise<unknown>, warning: string){
     try {
-        await joplin.views.menuItems.create(OPEN_MENU_ITEM, OPEN_COMMAND, MenuItemLocation.Tools, { accelerator: OPEN_ACCELERATOR })
+        await create()
     } catch (error) {
-        console.warn("Jot: could not add Tools > Jot… (menus do not exist on mobile)", error)
-    }
-    try {
-        await joplin.views.menuItems.create(SELECTION_MENU_ITEM, SELECTION_COMMAND, MenuItemLocation.EditorContextMenu)
-    } catch (error) {
-        console.warn("Jot: could not add Jot from the selection… to the editor's right-click menu", error)
-    }
-    try {
-        await joplin.views.menuItems.create(EDIT_MENU_ITEM, EDIT_COMMAND, MenuItemLocation.NoteListContextMenu)
-    } catch (error) {
-        console.warn("Jot: could not add Edit with Jot… to the note list's right-click menu", error)
+        console.warn(warning, error)
     }
 }
 
 /** setupToolbar ************************************************************************************************************************************
  * The note toolbar button, on both platforms (on mobile it is one of the two ways in). Joplin can only add a toolbar button while a plugin starts,  *
- * so the showToolbarButton setting is read here once and its change applies after a restart, as its description says (Cockpit's gate). Guarded as *
- * the menu is: a refusal costs the button, not the plugin.                                                                                         *
+ * so the showToolbarButton setting is read once at the start (setupSettings) and its change applies after a restart, as its description says       *
+ * (Cockpit's gate). Guarded as the menu is: a refusal costs the button, not the plugin.                                                            *
  ***************************************************************************************************************************************************/
-async function setupToolbar(){
-    if (!(await isToolbarButtonEnabled())) return
+async function setupToolbar(enabled: boolean){
+    if (!enabled) return
     try {
         await joplin.views.toolbarButtons.create(TOOLBAR_BUTTON, BUTTON_COMMAND, ToolbarButtonLocation.NoteToolbar)
     } catch (error) {
