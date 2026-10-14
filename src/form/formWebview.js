@@ -64,6 +64,7 @@ function readJotData(){
         defaults: data.defaults || {},
         pickerOpen: !!data.pickerOpen,
         inThisNote: data.inThisNote && Array.isArray(data.inThisNote.choices) ? data.inThisNote : null,
+        timing: data.timing && typeof data.timing === 'object' ? data.timing : null,
     }
 }
 
@@ -863,6 +864,21 @@ function jotCaretToEnd(field){
     field.scrollTop = field.scrollHeight
 }
 
+/** showJotTiming **********************************************************************************************************************************
+ * A test build's line under the heading (core/timing.ts): from the tap to this script running, then each part - the plugin's (selection,         *
+ * settings, lists, form, dialog) and the dialog showing itself, from setHtml to now. Both clocks are the device's wall clock.                       *
+ ***************************************************************************************************************************************************/
+function showJotTiming(){
+    var line = jotById('jotTiming')
+    var timing = jotData.timing
+    if (!line || !timing) return
+    var now = Date.now()
+    var seconds = function(ms){ return (Math.max(0, ms) / 1000).toFixed(2) }
+    var parts = (timing.parts || []).map(function(part){ return part[0] + ' ' + seconds(part[1]) })
+    parts.push('show ' + seconds(now - timing.htmlAt))
+    line.textContent = 'Opened in ' + seconds(now - timing.start) + ' s: ' + parts.join(', ')
+}
+
 /** focusJotTitle **********************************************************************************************************************************
  * The Title has the focus on open, so typing goes there, Enter creates and Shift+Tab reaches the Type toggle. autofocus in the markup only counts     *
  * while a document is parsing, and this markup arrives later, so the focus is given here - and once more when the dialog's frame itself receives the *
@@ -946,6 +962,7 @@ function initJotFormIfNeeded(){
     form.addEventListener('keydown', onJotFormKeyDown)
 
     setJotType(jotById('jotType').value)
+    showJotTiming()
     sizeJotGrowAll()
     writeJotDue(due.date, due.time)
     renderAlarmCalendar()

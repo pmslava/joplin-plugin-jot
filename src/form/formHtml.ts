@@ -70,6 +70,9 @@ export interface FormView {
     inThisNoteDefault?: string
     // The line the Back link row would add (formModel.backlinkText), shown as the Add button's tooltip; empty or absent: no row (no note to link to).
     backlinkText?: string
+    // A test build's open timings (core/timing.ts, SHOW_OPEN_TIMINGS): the tap's time, the parts timed in the plugin, and when setHtml was called;
+    // the form's script adds how long the dialog took to show and writes the line under the heading. Absent or null: no line.
+    timing?: { start: number, parts: [string, number][], htmlAt: number } | null
 }
 
 interface SegmentOption { value: string; label: string; title?: string }
@@ -151,6 +154,7 @@ export function buildFormHtml(view: FormView): string {
         defaults: { type: type, notebookId: values.notebookId, dayStart: view.dayStart },
         pickerOpen: !!view.pickerOpen,
         inThisNote: choices.length ? { choices: choices, value: choice, fallback: fallback } : null,
+        timing: view.timing || null,
     })
     // A hidden marker on mobile only, as Cockpit's #cockpitPlatform: the script mirrors it onto #joplin-plugin-content as the jot-mobile class,
     // which the narrow layout in form.css is gated on (never a viewport @media query, which would also match Joplin's measuring pass).
@@ -187,7 +191,7 @@ export function buildFormHtml(view: FormView): string {
         <form name="jot" id="jotForm" class="jot-form${isNote ? " -note" : ""}" autocomplete="off">
             <div class="jot-head">
                 <strong id="jotHeading" class="jot-heading">${escapeHtml(FormModel.headingFor(type, mode))}</strong>${hint}
-            </div>${typeRow}
+            </div>${view.timing ? '\n            <div id="jotTiming" class="jot-timing"></div>' : ""}${typeRow}
             <div class="jot-row jot-row-top">
                 <label class="jot-label" for="jotTitle">Title</label>
                 <textarea name="title" id="jotTitle" class="jot-input jot-grow" rows="1" autocomplete="off" autofocus>\n${escapeHtml(values.title)}</textarea>

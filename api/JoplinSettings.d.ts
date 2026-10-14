@@ -43,6 +43,11 @@ export default class JoplinSettings {
      */
     value(key: string): Promise<any>;
     /**
+     * Gets several setting values at once, as { key: value } (only applies to settings you registered from your plugin). Present in Joplin 3.7.21
+     * (read in its bundle, 2026-10-14); these typings predate it.
+     */
+    values(keys: string[] | string): Promise<Record<string, unknown>>;
+    /**
      * Sets a setting value (only applies to setting you registered from your plugin)
      */
     setValue(key: string, value: any): Promise<void>;

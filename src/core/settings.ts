@@ -316,6 +316,66 @@ export async function getBacklinkSettings(): Promise<{ for: string, template: st
     return { for: when, template, position }
 }
 
+/** getFormSettings *******************************************************************************************************************************
+ * Every setting the form starts from, in ONE call (joplin.settings.values, 3.7.21: { key: value } for the keys asked), normalized as the getters    *
+ * above normalize them. On a phone each call from the plugin to Joplin is a round trip, and the form used to make about ten of them before it could *
+ * open. An app without values() is read key by key. Never throws: an unreadable setting is its default.                                          *
+ ***************************************************************************************************************************************************/
+const FORM_SETTING_KEYS = [
+    DEFAULT_TYPE_KEY, DAY_START_TIME_KEY, DEFAULT_NOTEBOOK_KEY, TEXT_NOTEBOOK_KEY, TAGS_FROM_KEY, BACKLINK_FOR_KEY, BACKLINK_TEMPLATE_KEY,
+    BACKLINK_POSITION_KEY, OPEN_AFTER_CREATE_KEY, SELECTION_ACTION_KEY, TRIGGER_ACTION_KEY,
+]
+
+export interface FormSettings {
+    defaultType: string
+    dayStartTime: string
+    quickNotebookId: string
+    textNotebookId: string
+    tagsFrom: string
+    backlink: { for: string, template: string, position: string }
+    openAfterCreate: string
+    selectionAction: string
+    triggerAction: string
+}
+
+async function readFormSettingValues(): Promise<Record<string, unknown>> {
+    try {
+        const values = await joplin.settings.values(FORM_SETTING_KEYS)
+        if (values && typeof values === "object") return values
+    } catch (error) {
+        // An app without settings.values: one read each, below.
+    }
+    const values: Record<string, unknown> = {}
+    for (const key of FORM_SETTING_KEYS){
+        try {
+            values[key] = await joplin.settings.value(key)
+        } catch (error) {
+            values[key] = undefined
+        }
+    }
+    return values
+}
+
+export async function getFormSettings(): Promise<FormSettings> {
+    const raw = await readFormSettingValues()
+    const open = raw[OPEN_AFTER_CREATE_KEY]
+    return {
+        defaultType: raw[DEFAULT_TYPE_KEY] === TYPE_NOTE ? TYPE_NOTE : TYPE_TODO,
+        dayStartTime: String(raw[DAY_START_TIME_KEY] || ""),
+        quickNotebookId: String(raw[DEFAULT_NOTEBOOK_KEY] || ""),
+        textNotebookId: String(raw[TEXT_NOTEBOOK_KEY] || ""),
+        tagsFrom: forValue(raw[TAGS_FROM_KEY], FOR_TEXT),
+        backlink: {
+            for: forValue(raw[BACKLINK_FOR_KEY], FOR_NEVER),
+            template: String(raw[BACKLINK_TEMPLATE_KEY] || "").trim() || DEFAULT_BACKLINK_TEMPLATE,
+            position: raw[BACKLINK_POSITION_KEY] === BACKLINK_BOTTOM ? BACKLINK_BOTTOM : BACKLINK_TOP,
+        },
+        openAfterCreate: open === OPEN_IN_EDITOR || open === OPEN_IN_WINDOW ? open : OPEN_NO,
+        selectionAction: String(raw[SELECTION_ACTION_KEY] || SELECTION_REPLACE),
+        triggerAction: String(raw[TRIGGER_ACTION_KEY] || TRIGGER_LINK),
+    }
+}
+
 /** registerNotebookChoices *************************************************************************************************************************
  * Registers the two notebook settings again with `notebooks` ({ id, path }, sorted) as their options, when they differ from the list registered last. *
  * stored value is kept (see the README). Never throws: a refusal is a console warning, and the setting keeps its last options.                     *

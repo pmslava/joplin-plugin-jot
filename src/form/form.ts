@@ -51,11 +51,8 @@
 /** Imports *****************************************************************************************************************************************/
 import joplin from "api"
 import { buildFormHtml, FormNotebook, FormValues } from "./formHtml"
-import {
-    getBacklinkSettings, getDayStartTime, getDefaultNotebookId, getDefaultType, getOpenAfterCreate, getSelectionAction, getTagsFrom,
-    getTriggerAction,
-    OPEN_IN_WINDOW, registerNotebookChoices,
-} from "../core/settings"
+import { FormSettings, getDayStartTime, getFormSettings, OPEN_IN_WINDOW, registerNotebookChoices } from "../core/settings"
+import { SHOW_OPEN_TIMINGS, Stopwatch, stopwatch } from "../core/timing"
 import { isMobile } from "../core/platform"
 import { applySelectionEdit, editorIsMarkdown, readSelectedText } from "./editorSelection"
 import { guardTiming, holdSelection, keepSelection } from "./selectionGuard"
@@ -107,6 +104,8 @@ export interface FormPresets {
     notebookId?: string
     selection?: string
     trigger?: string
+    // Internal: the open's stopwatch, started at the tap (openJot), so the selection read is timed too (core/timing.ts).
+    timing?: Stopwatch
 }
 
 // What the commands resolve in create mode (brief section 6).
@@ -207,10 +206,12 @@ export async function runOpenCommand(args?: unknown): Promise<FormOutcome | Edit
  ***************************************************************************************************************************************************/
 export async function openJot(route: string): Promise<FormOutcome | null> {
     if (formIsOpen) return null
+    const timing = stopwatch()
     const selection = await readSelectedText()
+    timing.lap("selection")
     const split = FormModel.splitSelection(selection)
-    if (split.empty) return openForm(route)
-    return openForm(SELECTION_ROUTE, { title: split.title, body: split.body, selection })
+    if (split.empty) return openForm(route, { timing })
+    return openForm(SELECTION_ROUTE, { title: split.title, body: split.body, selection, timing })
 }
 
 /** openForm ****************************************************************************************************************************************
@@ -286,17 +287,17 @@ async function withFormOpen<T>(work: () => Promise<T>): Promise<T | null> {
  * setting, else on Replace. The trigger route: Replace with a link and Remove, labelled with the trigger, starting on triggerAction, else the link.  *
  * Every other route: no row, and nothing is read.                                                                                                  *
  ***************************************************************************************************************************************************/
-async function inThisNoteFor(route: string, presets: FormPresets): Promise<InThisNote> {
+async function inThisNoteFor(route: string, presets: FormPresets, settings: FormSettings): Promise<InThisNote> {
     if (route === SELECTION_ROUTE && typeof presets.selection === "string"){
         const choices: string[] = FormModel.selectionChoices(await editorIsMarkdown())
         const fallback: string = FormModel.SELECTION_DEFAULT
-        const value = FormModel.inThisNoteAction(await getSelectionAction(), choices, fallback)
+        const value = FormModel.inThisNoteAction(settings.selectionAction, choices, fallback)
         return { choices, labels: FormModel.SELECTION_SHORT_LABELS, titles: FormModel.SELECTION_LABELS, value, fallback, selection: presets.selection, trigger: null }
     }
     if (route === TRIGGER_ROUTE && typeof presets.trigger === "string"){
         const choices: string[] = FormModel.triggerChoices()
         const fallback: string = FormModel.TRIGGER_DEFAULT
-        const value = FormModel.inThisNoteAction(await getTriggerAction(), choices, fallback)
+        const value = FormModel.inThisNoteAction(settings.triggerAction, choices, fallback)
         return {
             choices, labels: FormModel.triggerShortLabels(presets.trigger), titles: FormModel.triggerLabels(presets.trigger), value, fallback,
             selection: null, trigger: presets.trigger,
@@ -309,13 +310,28 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
     // Everything the form shows, read at once (the pages of a long list are still read one after the other).
     // Issue 6: a note from text in a note (highlighted text, the typed trigger) and a quick note (nothing highlighted, or another plugin's call) start
     // differently - each has its own notebook setting, and the tags and the back link say for which.
+    //
+    // QUICK TO OPEN. On a phone every call to Joplin is a round trip, so the open makes as few as it can before the form shows: the settings in one
+    // call (getFormSettings), the notebook and tag lists from the cache (formLists; read again in the background once the form closes), the dialog
+    // built at startup (warmUp). The current note and the platform are read alongside.
+    const timing = presets.timing || stopwatch()
     const fromText = route === SELECTION_ROUTE || route === TRIGGER_ROUTE
-    const [folders, tagList, defaultType, dayStartSetting, mobile, settingNotebookId, tagsFrom, backlinkSettings, openDefault, editorNote, row] = await Promise.all([
-        getAllFolders(), getAllTags(), getDefaultType(), getDayStartTime(), isMobile(), getDefaultNotebookId(fromText), getTagsFrom(),
-        getBacklinkSettings(), getOpenAfterCreate(), route === CALLER_ROUTE ? Promise.resolve(undefined) : selectedNote(), inThisNoteFor(route, presets),
+    const [settings, mobile, editorNote] = await Promise.all([
+        getFormSettings(), isMobile(), route === CALLER_ROUTE ? Promise.resolve(undefined) : selectedNote(),
     ])
+    timing.lap("settings")
+    const settingNotebookId = fromText ? settings.textNotebookId : settings.quickNotebookId
+    const lists = await formLists([settingNotebookId, editorNote && editorNote.parent_id, presets.notebookId])
+    timing.lap("lists")
+    const folders = lists.folders
+    const tagList = lists.tags
+    const row = await inThisNoteFor(route, presets, settings)
+    const defaultType = settings.defaultType
+    const dayStartSetting = settings.dayStartTime
+    const tagsFrom = settings.tagsFrom
+    const backlinkSettings = settings.backlink
+    const openDefault = settings.openAfterCreate
     const notebooks: FormNotebook[] = FormModel.buildNotebookPaths(folders)
-    void registerNotebookChoices(notebooks)
     if (!notebooks.length){
         await joplin.views.dialogs.showMessageBox(FormModel.NO_NOTEBOOK_MESSAGE)
         return null
@@ -346,26 +362,34 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
         open: open,
     }
     let pickerOpen = false
+    timing.lap("form")
     const handle = await getDialog(CREATE_DIALOG)
+    timing.lap("dialog")
 
-    for (;;){
-        await joplin.views.dialogs.setHtml(handle, buildFormHtml({
-            notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen, inThisNoteChoices, inThisNoteLabels: row.labels, inThisNoteTitles: row.titles,
-            inThisNoteDefault: row.fallback, backlinkText: backlinkLine,
-        }))
-        const result = await joplin.views.dialogs.open(handle)
-        const plan = FormModel.planCreate(result, {
-            defaultType: resolvedType, dayStart, notebookId, inThisNoteChoices, inThisNoteDefault: row.fallback, mobile, openDefault: open, backlink,
-        })
-        if (plan.kind === "none" || plan.kind === "nothing") return null
-        if (plan.kind === "invalidDue"){
-            // Refused: say why, then show the form again with everything as typed and the picker unfolded on the value that was refused.
-            await joplin.views.dialogs.showMessageBox(FormModel.DUE_MESSAGE)
-            values = plan.values
-            pickerOpen = true
-            continue
+    try {
+        for (;;){
+            await joplin.views.dialogs.setHtml(handle, buildFormHtml({
+                notebooks, tags: tagTitles, values, dayStart, mobile, pickerOpen, inThisNoteChoices, inThisNoteLabels: row.labels, inThisNoteTitles: row.titles,
+                inThisNoteDefault: row.fallback, backlinkText: backlinkLine,
+                timing: SHOW_OPEN_TIMINGS ? { start: timing.start, parts: timing.parts, htmlAt: Date.now() } : null,
+            }))
+            const result = await joplin.views.dialogs.open(handle)
+            const plan = FormModel.planCreate(result, {
+                defaultType: resolvedType, dayStart, notebookId, inThisNoteChoices, inThisNoteDefault: row.fallback, mobile, openDefault: open, backlink,
+            })
+            if (plan.kind === "none" || plan.kind === "nothing") return null
+            if (plan.kind === "invalidDue"){
+                // Refused: say why, then show the form again with everything as typed and the picker unfolded on the value that was refused.
+                await joplin.views.dialogs.showMessageBox(FormModel.DUE_MESSAGE)
+                values = plan.values
+                pickerOpen = true
+                continue
+            }
+            return await createNote(plan, row)
         }
-        return await createNote(plan, row)
+    } finally {
+        // The lists for the next open, read now that this one is over (a notebook or tag made meanwhile shows from the next open).
+        void refreshLists()
     }
 }
 
@@ -374,10 +398,55 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
  * same each time it reads the notebooks. Never throws.                                                                                             *
  ***************************************************************************************************************************************************/
 export async function refreshNotebookSetting(): Promise<void> {
+    await refreshLists()
+}
+
+/** The notebook and tag lists: a cache ****************************************************************************************************************
+ * The form shows every notebook and every tag, which on a phone took a round trip per hundred before it could open. They are read at startup and   *
+ * again after every form, and the form opens on what was read last (formLists). A list read is also when the notebook settings' dropdowns are       *
+ * registered again. A notebook the form must start on that the cache does not hold (made since the last read: the note you are in may live there)  *
+ * makes the form read the lists first, so it never starts on the wrong notebook; so does a cache with no notebook at all, so the form never says   *
+ * there is none when one was made since. Tags typed that are not in the cache are still created on Create,                                         *
+ * which reads the tags afresh (attachTags).                                                                                                         *
+ ***************************************************************************************************************************************************/
+var listCache: { folders: any[], tags: any[] } | null = null
+var listRead: Promise<void> | null = null
+
+export function refreshLists(): Promise<void> {
+    if (!listRead){
+        listRead = (async () => {
+            try {
+                const [folders, tags] = await Promise.all([getAllFolders(), getAllTags()])
+                listCache = { folders, tags }
+                await registerNotebookChoices(FormModel.buildNotebookPaths(folders))
+            } catch (error) {
+                console.warn("Jot: could not read the notebooks and tags", error)
+            } finally {
+                listRead = null
+            }
+        })()
+    }
+    return listRead
+}
+
+async function formLists(needed: unknown[] = []): Promise<{ folders: any[], tags: any[] }> {
+    const held = (id: unknown) => !id || !listCache || listCache.folders.some(folder => folder && folder.id === id)
+    // No cache, a cache with no notebook at all (read before the first one was made: the form would say there is none), or one without a notebook
+    // the form must start on: read first.
+    if (!listCache || !listCache.folders.length || !needed.every(held)) await refreshLists()
+    return listCache || { folders: [], tags: [] }
+}
+
+/** warmUp ******************************************************************************************************************************************
+ * Run once the plugin has started, never in its way: the lists read, and the create form's dialog built, so the first open costs neither. Never    *
+ * throws.                                                                                                                                          *
+ ***************************************************************************************************************************************************/
+export async function warmUp(): Promise<void> {
+    await refreshLists()
     try {
-        await registerNotebookChoices(FormModel.buildNotebookPaths(await getAllFolders()))
+        await getDialog(CREATE_DIALOG)
     } catch (error) {
-        console.warn("Jot: could not list the notebooks for the notebook setting", error)
+        console.warn("Jot: could not prepare the form", error)
     }
 }
 
@@ -552,9 +621,10 @@ async function runEdit(noteId: string): Promise<EditOutcome | null> {
         await joplin.views.dialogs.showMessageBox(FormModel.NO_NOTE_MESSAGE)
         return null
     }
-    const [folders, tagList, dayStartSetting, mobile] = await Promise.all([getAllFolders(), getAllTags(), getDayStartTime(), isMobile()])
+    const [lists, dayStartSetting, mobile] = await Promise.all([formLists([loaded.note.parent_id]), getDayStartTime(), isMobile()])
+    const folders = lists.folders
+    const tagList = lists.tags
     const notebooks: FormNotebook[] = FormModel.buildNotebookPaths(folders)
-    void registerNotebookChoices(notebooks)
     const tagTitles = tagList.map(tag => tag.title).filter(title => !!title).sort()
     const dayStart = FormModel.dayStartText(dayStartSetting)
     const start = FormModel.editStart(loaded.note, loaded.tags)

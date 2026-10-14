@@ -26,7 +26,7 @@ import joplin from 'api'
 import { MenuItemLocation, ToolbarButtonLocation } from 'api/types'
 import { isMobile } from './core/platform'
 import { isToolbarButtonEnabled, setupSettings } from './core/settings'
-import { openEditFromCommand, openJot, refreshNotebookSetting, runOpenCommand } from './form/form'
+import { openEditFromCommand, openJot, refreshLists, runOpenCommand, warmUp } from './form/form'
 import { setupTrigger } from './trigger'
 
 /** Constants ***************************************************************************************************************************************/
@@ -61,8 +61,14 @@ export async function setupPlugin(){
     await setupMenu()
     await setupToolbar()
     await setupTrigger()
-    // The notebook setting's dropdown lists the notebooks that exist: read once the rest is up, and never in the way of the start.
-    void refreshNotebookSetting()
+    // Once the rest is up, and never in the way of the start: the notebook and tag lists read (they also fill the notebook settings' dropdowns) and
+    // the form's dialog built, so the first open costs neither; and the lists read again after every sync, which can bring notebooks and tags.
+    void warmUp()
+    try {
+        await joplin.workspace.onSyncComplete(() => { void refreshLists() })
+    } catch (error) {
+        console.warn("Jot: could not follow syncs; the notebook and tag lists are read after each form instead", error)
+    }
 }
 
 /** setupCommands ***********************************************************************************************************************************

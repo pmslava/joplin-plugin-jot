@@ -78,7 +78,7 @@ async function check(name, fn) {
 function makeJoplin(options) {
     const state = {
         onStart: null, commands: [], menuItems: [], toolbarButtons: [], messageBoxes: [], warnings: [],
-        sections: [], settingSpecs: {}, settingWrites: [], globalReads: [], settingRegistrations: [],
+        sections: [], settingSpecs: {}, settingWrites: [], globalReads: [], settingRegistrations: [], settingReads: [], settingBatches: [], syncHandlers: [],
         dialogCreates: [], dialogScripts: [], dialogButtons: [], dialogHtml: [], dialogOpens: 0,
         dataGets: [], dataPosts: [], dataPuts: [], dataDeletes: [], executes: [], workspaceCalls: [], timeline: [],
         contentScripts: [], contentScriptHandlers: {}, selectionReads: 0,
@@ -105,9 +105,22 @@ function makeJoplin(options) {
             registerSection: async (name, spec) => { state.sections.push({ name, spec }) },
             registerSettings: async (specs) => { state.settingRegistrations.push(Object.keys(specs)); Object.assign(state.settingSpecs, specs) },
             value: async (key) => {
+                state.settingReads.push(key)
                 if (key in written) return written[key]
                 if (options.settings && key in options.settings) return options.settings[key]
                 return state.settingSpecs[key] ? state.settingSpecs[key].value : undefined
+            },
+            // joplin.settings.values (3.7.21): { key: value } for the keys asked, in one call; settingsValuesMissing makes an app without it.
+            values: async (keys) => {
+                if (options.settingsValuesMissing) throw new Error('joplin.settings.values is not a function')
+                state.settingBatches.push(keys.slice())
+                const out = {}
+                for (const key of keys) {
+                    if (key in written) out[key] = written[key]
+                    else if (options.settings && key in options.settings) out[key] = options.settings[key]
+                    else out[key] = state.settingSpecs[key] ? state.settingSpecs[key].value : undefined
+                }
+                return out
             },
             setValue: async (key, value) => {
                 state.settingWrites.push({ key, value })
@@ -134,6 +147,7 @@ function makeJoplin(options) {
         workspace: {
             selectedNote: async () => { state.workspaceCalls.push('selectedNote'); return options.selectedNote === undefined ? null : options.selectedNote },
             selectedFolder: async () => { state.workspaceCalls.push('selectedFolder'); return options.selectedFolder === undefined ? null : options.selectedFolder },
+            onSyncComplete: async (handler) => { state.syncHandlers.push(handler) },
             selectedNoteIds: async () => {
                 const read = state.selectionReads++
                 const ids = typeof options.selectedNoteIds === 'function' ? options.selectedNoteIds(read, state) : options.selectedNoteIds
@@ -649,8 +663,9 @@ async function main() {
         assert.deepStrictEqual(Object.keys(mobile.contentScriptHandlers), ['jot.trigger'])
         assert.ok(fs.existsSync(path.join(DIST, 'contentScript.js')), 'the path names the built script, next to index.js')
         const source = read('src/index.ts')
-        assert.ok(/await setupTrigger\(\)\n(?:\s*\/\/[^\n]*\n)*\s*void refreshNotebookSetting\(\)\n\}/.test(source),
-            'setupTrigger is the last setup awaited; only the notebook setting\'s list follows, not awaited')
+        assert.ok(/await setupTrigger\(\)\n(?:\s*\/\/[^\n]*\n)*\s*void warmUp\(\)\n/.test(source),
+            'setupTrigger is the last setup awaited; the warm-up (lists and the form\'s dialog) follows, not awaited')
+        assert.ok(source.includes('await joplin.workspace.onSyncComplete(() => { void refreshLists() })'), 'and the lists are read again after each sync')
     })
 
     await check('typed trigger: an app that refuses the content script still starts the plugin, with one console warning', async () => {
@@ -749,13 +764,15 @@ async function main() {
     })
 
     // ---------------------------------------------------------------- the form's dialog and markup
-    await check('form: the dialog is built on the first open only (not at startup): one handle, five scripts in order, two buttons (Create, Cancel)', async () => {
-        assert.deepStrictEqual(desktop.dialogCreates, [], 'nothing is built while the plugin starts')
+    await check('form: the create form\'s dialog is built once, in the background once the plugin has started (so the first open does not wait for it): one handle, five scripts in order, two buttons (Create, Cancel)', async () => {
+        assert.deepStrictEqual(desktop.dialogCreates, ['jot.form'], 'built by the warm-up, after onStart')
+        const source = read('src/index.ts')
+        assert.ok(!/await warmUp\(\)/.test(source), 'never awaited by onStart')
         const state = await runBundle({ ...FORM_BASE })
         const command = state.commands.find(item => item.name === 'jot.open')
         await command.execute()
         await command.execute()
-        assert.deepStrictEqual(state.dialogCreates, ['jot.form'])
+        assert.deepStrictEqual(state.dialogCreates, ['jot.form'], 'the opens reuse it')
         assert.deepStrictEqual(state.dialogScripts, ['./form/form.css', './form/alarmQuick.js', './form/searchTokens.js', './form/formModel.js', './form/formWebview.js'])
         assert.deepStrictEqual(state.dialogButtons, [[
             { id: 'ok', title: 'Create' },
@@ -872,7 +889,7 @@ async function main() {
         const { state, outcome } = await openFormWith({ folders: [] })
         assert.deepStrictEqual(state.messageBoxes, ['Jot: there is no notebook to create in.'])
         assert.strictEqual(state.dialogOpens, 0)
-        assert.deepStrictEqual(state.dialogCreates, [])
+        assert.deepStrictEqual(state.dialogCreates, ['jot.form'], 'only the warm-up\'s build; nothing opened')
         assert.strictEqual(outcome, null)
     })
 
@@ -1329,9 +1346,12 @@ async function main() {
         const { state, outcome } = await editWith({})
         assert.strictEqual(outcome, null, 'Cancel (the stub\'s default answer) resolves null')
         assert.deepStrictEqual(noteReads(state), ['notes/nEdit id,title,is_todo,parent_id,todo_due', 'notes/nEdit/tags id,title'])
-        assert.deepStrictEqual(state.dialogCreates, ['jot.edit'])
-        assert.deepStrictEqual(state.dialogScripts, ['./form/form.css', './form/alarmQuick.js', './form/searchTokens.js', './form/formModel.js', './form/formWebview.js'])
-        assert.deepStrictEqual(state.dialogButtons, [[{ id: 'ok', title: 'Save' }, { id: 'cancel', title: 'Cancel' }]])
+        assert.deepStrictEqual(state.dialogCreates, ['jot.form', 'jot.edit'], 'the create form\'s from the warm-up, then edit mode\'s on its first open')
+        const five = ['./form/form.css', './form/alarmQuick.js', './form/searchTokens.js', './form/formModel.js', './form/formWebview.js']
+        assert.deepStrictEqual(state.dialogScripts.slice().sort(), five.concat(five).sort(), 'the same five scripts for each handle (the two builds may interleave)')
+        assert.deepStrictEqual(state.dialogButtons.map(buttons => buttons.map(button => button.title).join('/')).sort(), ['Create/Cancel', 'Save/Cancel'],
+            'the create form\'s buttons (warm-up) and edit mode\'s: Save (id ok) and Cancel')
+        assert.ok(state.dialogButtons.some(buttons => JSON.stringify(buttons) === JSON.stringify([{ id: 'ok', title: 'Save' }, { id: 'cancel', title: 'Cancel' }])))
         assert.deepStrictEqual(state.executes, [], 'no selection read, no open, no focus move')
         assert.deepStrictEqual(state.timeline, [])
         // Both modes in one session: each handle built once, with its own buttons.
@@ -1467,7 +1487,7 @@ async function main() {
             const { state, outcome } = await editWith(options)
             assert.strictEqual(outcome, null, JSON.stringify(options))
             assert.deepStrictEqual(state.messageBoxes, ['Jot: this note no longer exists.'], JSON.stringify(options))
-            assert.deepStrictEqual([state.dialogCreates, state.dialogOpens, state.timeline], [[], 0, []], JSON.stringify(options))
+            assert.deepStrictEqual([state.dialogCreates, state.dialogOpens, state.timeline], [['jot.form'], 0, []], JSON.stringify(options))
         }
         for (const args of [{ mode: 'edit' }, { mode: 'edit', noteId: '' }, { mode: 'edit', noteId: 42 }]) {
             const { state, outcome } = await editWith({}, args)
@@ -1549,7 +1569,7 @@ async function main() {
         assert.ok(state.dialogHtml[0].includes('>Edit to-do</strong>') && fieldValue(state.dialogHtml[0], 'title') === 'Call the bank')
         assert.deepStrictEqual(state.dataPuts, [{ path: ['notes', 'nEdit'], query: null, body: { title: 'Via the list' } }])
         assert.deepStrictEqual(outcome, { id: 'nEdit', changed: ['title'] })
-        assert.deepStrictEqual([state.dialogCreates, state.executes], [['jot.edit'], []])
+        assert.deepStrictEqual([state.dialogCreates, state.executes], [['jot.form', 'jot.edit'], []])
         const palette = await runBundle({ ...FORM_BASE, ...EDIT_BASE, selectedNote: { id: 'nEdit', parent_id: 'fWork' } })
         await withWarnings(palette, () => palette.commands.find(item => item.name === 'jot.edit').execute())
         assert.deepStrictEqual(noteReads(palette)[0], 'notes/nEdit id,title,is_todo,parent_id,todo_due')
@@ -2527,6 +2547,58 @@ async function main() {
         assert.deepStrictEqual((group.match(/data-value="([a-z]+)"/g) || []).map(match => match.slice(12, -1)), ['note', 'todo'])
         assert.strictEqual(segValue(state.dialogHtml[0], 'jotType'), 'todo')
         assert.deepStrictEqual(Object.keys(state.settingSpecs.defaultType.options), ['note', 'todo'])
+    })
+
+    await check('quick to open: the settings in one call; the notebook and tag lists from the cache (read at startup), none read before the form shows; read again once it closes', async () => {
+        const folderReads = (state) => state.dataGets.filter(get => get.path.length === 1 && (get.path[0] === 'folders' || get.path[0] === 'tags')).length
+        let atOpen = -1
+        const state = await runBundle({ ...FORM_BASE, openDialog: (st) => { atOpen = folderReads(st); return { id: 'cancel' } } })
+        await tick(5)
+        const afterStartup = folderReads(state)
+        assert.ok(afterStartup > 0, 'the warm-up read the lists')
+        state.settingReads.length = 0
+        await withWarnings(state, () => state.commands.find(item => item.name === 'jot.open').execute())
+        assert.strictEqual(atOpen, afterStartup, 'no list read between the tap and the form')
+        assert.deepStrictEqual(state.settingBatches.slice(-1)[0], ['defaultType', 'dayStartTime', 'defaultNotebook', 'textNotebook', 'tagsFrom', 'backlinkFor', 'backlinkTemplate',
+            'backlinkPosition', 'openAfterCreate', 'selectionAction', 'triggerAction'], 'every setting the form starts from, in one call')
+        assert.deepStrictEqual(state.settingReads, [], 'and no single reads')
+        await tick(5)
+        assert.ok(folderReads(state) > afterStartup, 'the lists are read again once the form has closed, for the next open')
+        assert.strictEqual(state.syncHandlers.length, 1, 'and after every sync')
+        const beforeSync = folderReads(state)
+        state.syncHandlers[0]()
+        await tick(5)
+        assert.ok(folderReads(state) > beforeSync)
+    })
+
+    await check('quick to open: a notebook the cache does not hold (the note you are in lives in one made since) makes the form read the lists first, so it never starts on the wrong notebook; an app without settings.values reads them one by one', async () => {
+        const folders = FOLDERS.slice()
+        const state = await runBundle({ ...FORM_BASE, folders, selectedNote: { id: 'nNew', parent_id: 'fNew' } })
+        await tick(5)
+        folders.push({ id: 'fNew', title: 'Made just now', parent_id: '' })
+        await withWarnings(state, () => state.commands.find(item => item.name === 'jot.open').execute())
+        assert.strictEqual(islandOf(state.dialogHtml[0]).data.defaults.notebookId, 'fNew')
+        const old = await openFormWith({ settingsValuesMissing: true, settings: { defaultType: 'note', openAfterCreate: 'editor' } })
+        const html = old.state.dialogHtml[0]
+        assert.deepStrictEqual([segValue(html, 'jotType'), segValue(html, 'jotOpen')], ['note', 'editor'], 'the same settings, read one by one')
+        assert.ok(old.state.settingReads.includes('defaultType') && old.state.settingReads.includes('openAfterCreate'))
+    })
+
+    await check('quick to open: a cache read before the first notebook was made (no notebook at all) is read again before the form says there is none', async () => {
+        const folders = []
+        const state = await runBundle({ ...FORM_BASE, folders, selectedNote: null })
+        await tick(5)
+        folders.push({ id: 'fFirst', title: 'First', parent_id: '' })
+        await withWarnings(state, () => state.commands.find(item => item.name === 'jot.open').execute())
+        assert.deepStrictEqual(state.messageBoxes, [], 'no "there is no notebook" message')
+        assert.strictEqual(islandOf(state.dialogHtml[0]).data.defaults.notebookId, 'fFirst')
+    })
+
+    await check('quick to open: the timing line is off in every commit (a test build turns it on, never committed); off, the markup carries no line and the island no timing', async () => {
+        assert.ok(read('src/core/timing.ts').includes('export const SHOW_OPEN_TIMINGS = false'), 'SHOW_OPEN_TIMINGS is false')
+        const { state } = await openFormWith({})
+        assert.ok(!state.dialogHtml[0].includes('jotTiming'))
+        assert.strictEqual(islandOf(state.dialogHtml[0]).data.timing, null)
     })
 
     await check('popup: one line per selector in the order Type, Title, Text, Notebook, Tags, In this note, Back link, Open, Due (last); a keyboard hint in the heading on desktop only', async () => {
