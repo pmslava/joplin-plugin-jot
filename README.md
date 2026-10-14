@@ -6,7 +6,7 @@ Quick capture of a note or to-do without leaving the one you are in.
 
 While you read or work in one note, Jot opens a small form for the title, a line or two of text, the notebook, tags and the due date, creates the note from it, and does not open it. You stay where you were. Joplin's own New note and New to-do create an empty note and open it, and Back lands at the top of the note you were reading; Jot exists so that never happens.
 
-The desktop is tested; Android is not yet, see the known limits below.
+Tested on the desktop and on Android. On a phone the ways in are the Jot button in the note toolbar and the typed trigger; the menus are desktop only.
 
 ## Install
 
@@ -71,7 +71,6 @@ Settings › Plugins › Jot:
 
 ## Known limits
 
-- Nothing has been checked on Android yet. The plugin installs there, but the form, the toolbar button and the trigger are untested on a phone.
 - In the Rich Text editor the typed trigger does not work (no plugin code runs there), and "Add a link after it" is not offered; the shortcut and the right-click entry work, and "Replace it with a link" writes the link as HTML.
 - The trigger ignores Markdown context: `++` after a space fires inside a code block too. Cancel once and that occurrence is left alone.
 - When the note list shows **All notes**, Joplin answers a new tag by selecting the note at the top of the list, which is the note Jot has just created. Jot notices and opens the note you were reading again, at the same scroll position and caret in the Markdown editor. Joplin can only do that by showing the note's notebook, so the note list switches from All notes to that notebook.
