@@ -218,7 +218,7 @@ textarea.jot-grow {
     }
 }
 
-/* The selectors - Type, In this note, Back link, Open: one line of segments that act as radios. A group takes the width
+/* The selectors - Type, In this note, Back link, Open, Note Tabs: one line of segments that act as radios. A group takes the width
  * its labels need; "-fill" (In this note) takes the row's width, its segments sharing it. A label that does not fit
  * ends in an ellipsis and shows whole as the button's tooltip. */
 .jot-seg {

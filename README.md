@@ -36,6 +36,7 @@ Type, Title, Text, Notebook, Tags, then the choices, and Due last. The title is 
 - **In this note**, when the form was opened from highlighted text: Replace with link (the default), Keep text, or Add link after. Opened by `++`: Replace `++` with link (the default) or Remove `++`. Each starts on its setting.
 - **Back link**: Add puts a line linking to the note you are in at the top of the new note, then an empty line, then the text (or at the bottom, by setting). Hover Add to see the line. It starts on the setting, Don't add unless you change it.
 - **Open**: No (stay where you are, the default), In editor, or New window. It starts on the setting.
+- **Note Tabs**, when its setting is on: Pin (the new note becomes a pinned tab in the Note Tabs plugin, without being opened) or Don't pin. It starts on the setting.
 
 Jot tells two kinds of note apart. A **quick note** is one you start with nothing highlighted, from the shortcut, the menu or the toolbar button: a reminder to deal with later. A **note from text in a note** is one you start from highlighted text or by typing `++`: it belongs with the note it came from. By default:
 
@@ -65,6 +66,7 @@ Settings › Plugins › Jot:
 - **Back link text**: `Parent {note_type}: {note_link}` by default. The placeholders are Copy Note ID's, for the note you are in: `{note_link}`, `{note_title}`, `{note_id}`, `{note_type}` (to-do or note), `{notebook_name}`, `{notebook_path}` (such as `Work/Projects`) and `{notebook_id}`. So `Extracted from: {note_link}` works too.
 - **Back link position**: the first line, above the text (default), or the last line, below it.
 - **Open the new note**: No, In the editor, or In a new window; the form's Open starts here.
+- **Pin the new note in Note Tabs**: Not used (default), Pin, or Don't pin; the form's Note Tabs row starts here, and Not used shows no row.
 - **In this note, for highlighted text**: Replace it with a link to the new note (default), Keep the text, or Add a link after it.
 - **In this note, for the typed trigger**: Replace the trigger with a link to the new note (default), or Remove the trigger.
 - **Typed trigger**, **Day start time**, and **Show the Jot button in the note toolbar** (after a restart, since Joplin cannot add or remove a toolbar button while running).
@@ -79,9 +81,13 @@ Settings › Plugins › Jot:
 
 [Cockpit](https://github.com/pmslava/joplin-plugin-cockpit) supports Jot from version 2.8, on desktop. A right-click on its New note or New to-do button opens Jot's form with that type and the panel's notebook, and a plain click can be set to do the same. Quick edit… in the right-click menu of its notes list opens Jot's edit mode on that note. Neither plugin needs the other.
 
+## Works with Note Tabs
+
+With the [Note Tabs](https://github.com/benji300/joplin-note-tabs) plugin installed (1.1.0 or later; 1.4.0 is the current release), set **Pin the new note in Note Tabs** to Pin or Don't pin and the form gets a Note Tabs row. Pin adds the new note to Note Tabs' panel as a pinned tab, and the note is not opened: you stay where you were, and the tab is there for later. With Open on In editor or New window, Note Tabs also sees the note being opened, and the tab stays pinned. If Note Tabs is not installed or is turned off, the note is still created, and Jot says so once, until Joplin restarts. Plugin settings are kept per device, so on a phone the row shows only when the setting is on there too.
+
 ## For other plugins
 
-`joplin.commands.execute('jot.open', args)`: with `{ mode: 'new', type, title, body, notebookId }` it opens the form with those presets and resolves `{ id, opened }`, or `null` on Cancel; with `{ mode: 'edit', noteId }` it opens edit mode and resolves `{ id, changed }`, the list of fields written, or `null`. With no arguments it behaves as the shortcut.
+`joplin.commands.execute('jot.open', args)`: with `{ mode: 'new', type, title, body, notebookId }` it opens the form with those presets and resolves `{ id, opened, pinned }`, or `null` on Cancel; with `{ mode: 'edit', noteId }` it opens edit mode and resolves `{ id, changed }`, the list of fields written, or `null`. With no arguments it behaves as the shortcut.
 
 ## Build from source
 

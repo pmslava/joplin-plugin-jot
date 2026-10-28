@@ -27,6 +27,16 @@ const EXTRACT_DIR = path.join(CACHE_DIR, 'squashfs-root');
 const JOPLIN_BINARY = path.join(EXTRACT_DIR, 'joplin');
 const PLUGIN_DIST = path.join(REPO_ROOT, 'dist');
 
+/**
+ * The Note Tabs plugin's released .jpl (joplin.plugin.note.tabs, by benji300), which `scripts/setup-e2e.sh` downloads beside the
+ * AppImage. Jot's Note Tabs row (issue 7) runs Note Tabs' `tabsPinNote`, so the spec that proves the pin needs the real plugin
+ * installed next to Jot - as a user has it, from a .jpl. Pass it in `launchJoplin({ extraPlugins })`.
+ */
+// The version is part of the file name (scripts/setup-e2e.sh writes the same name), so a bumped NOTE_TABS_E2E_VERSION runs its own
+// archive rather than whichever one the cache already held.
+export const NOTE_TABS_E2E_VERSION = process.env.NOTE_TABS_E2E_VERSION ?? '1.4.0';
+export const NOTE_TABS_JPL = path.join(CACHE_DIR, `joplin.plugin.note.tabs-${NOTE_TABS_E2E_VERSION}.jpl`);
+
 // The plugin id Jot ships under (see src/manifest.json). Joplin embeds it in the plugin's background
 // webview URL (?pluginId=...) and in the iframe ids of its dialogs and panels, so the harness keys on it.
 export const PLUGIN_ID = 'io.github.pmslava.jot';
@@ -40,8 +50,13 @@ export interface JoplinInstance {
   port: number;
 }
 
-/** Throws a helpful error if the harness prerequisites are missing. */
-export function assertE2EReady(): void {
+/** Throws a helpful error if the harness prerequisites are missing: the AppImage, the built plugin, and every extra plugin's .jpl. */
+export function assertE2EReady(extraPlugins: string[] = []): void {
+  for (const jpl of extraPlugins) {
+    if (!fs.existsSync(jpl) || fs.statSync(jpl).size === 0) {
+      throw new Error(`Plugin archive not found at ${jpl}.\nRun "npm run setup:e2e" first to download it.`);
+    }
+  }
   if (!fs.existsSync(JOPLIN_BINARY)) {
     throw new Error(
       `Joplin binary not found at ${JOPLIN_BINARY}.\n` +
@@ -58,9 +73,19 @@ export function assertE2EReady(): void {
  *
  * `extraSettings` are merged into the profile's settings.json, so a spec can preset any File-storage
  * setting Joplin reads at startup - e.g. the data-API server (`clipperServer.autoStart` + `api.token`),
- * which is how a spec makes a change through JOPLIN's own API rather than through the plugin.
+ * which is how a spec makes a change through JOPLIN's own API rather than through the plugin. A plugin's own settings are not
+ * among them: Joplin keeps a plugin setting registered without `storage` (Jot's, Note Tabs') in its database, not in settings.json
+ * (Setting.keyStorage, 3.6.14), so a spec sets those on the Options screen.
+ *
+ * `extraPlugins` are absolute paths of released .jpl archives, copied into the profile's `plugins` folder. That is where a user's
+ * installed plugins live: Joplin loads every .jpl it finds there at startup, so another plugin Jot talks to (Note Tabs) runs exactly
+ * as it would for a user.
  */
-export function createProfile(loadPlugin = true, extraSettings: Record<string, unknown> = {}): string {
+export function createProfile(
+  loadPlugin = true,
+  extraSettings: Record<string, unknown> = {},
+  extraPlugins: string[] = []
+): string {
   const profilesRoot = path.join(REPO_ROOT, 'e2e', '.profiles');
   fs.mkdirSync(profilesRoot, { recursive: true });
   const profileDir = fs.mkdtempSync(path.join(profilesRoot, 'profile-'));
@@ -80,6 +105,11 @@ export function createProfile(loadPlugin = true, extraSettings: Record<string, u
     JSON.stringify(settings, null, 2),
     'utf8'
   );
+  if (extraPlugins.length) {
+    const pluginsDir = path.join(profileDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    for (const jpl of extraPlugins) fs.copyFileSync(jpl, path.join(pluginsDir, path.basename(jpl)));
+  }
   return profileDir;
 }
 
@@ -153,11 +183,17 @@ export async function launchJoplin(
      * accepts, and the profile is still the throwaway one this harness creates.
      */
     envDev?: boolean;
+    /**
+     * Released .jpl archives to install beside this plugin (see createProfile), e.g. [NOTE_TABS_JPL]. Only a profile this call
+     * creates gets them; a profile passed as `profileDir` keeps whatever its first launch installed, as a user's would across a
+     * restart.
+     */
+    extraPlugins?: string[];
   } = {}
 ): Promise<JoplinInstance> {
-  const { loadPlugin = true } = opts;
-  assertE2EReady();
-  const profileDir = opts.profileDir ?? createProfile(loadPlugin, opts.settings);
+  const { loadPlugin = true, extraPlugins = [] } = opts;
+  assertE2EReady(extraPlugins);
+  const profileDir = opts.profileDir ?? createProfile(loadPlugin, opts.settings, extraPlugins);
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {

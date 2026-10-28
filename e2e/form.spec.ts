@@ -15,7 +15,7 @@ import {
  * The form is opened the way another plugin would open it, `jot.open` through the app's CommandService (hence
  * `launchJoplin({ envDev: true })`), and the command is NOT awaited at once: it resolves only when the form has
  * been answered and the note written, so each case starts it, drives the dialog, then awaits what it resolved
- * ({ id, opened }). What was written is read back through Joplin's own data API, enabled on the throwaway profile.
+ * ({ id, opened, pinned }). What was written is read back through Joplin's own data API, enabled on the throwaway profile.
  *
  * The dialog's fields live in a plugin webview iframe; its Create / Cancel buttons are Joplin's,
  * in the main window. A closed dialog unmounts its iframe, so "the form is gone" is "no frame holds #jotForm".

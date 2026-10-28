@@ -3,13 +3,14 @@
  * the dialog loads it as a script (window.FormModel, for formWebview.js), and the Node harness requires it directly (module.exports), so the three   *
  * run the same decisions and every rule below is pinned by a check rather than by reading the source. UMD in the shape of Cockpit's noteMenu.js.    *
  *                                                                                                                                                  *
- * What is here: the dialog result's dispatch (which button), the form values read back from formData, the empty-title rule, the tag csv, the date   *
- * and time validation (Cockpit's parseAlarmFields), the due timestamp, the day start time, the notebook paths and the notebook default order, the    *
- * create plan the host executes, the selection route's rules (the title/text split, the In this note choices and their default, the link, the edit  *
- * the host makes in the note), the trigger route's (its two choices, their labels with the trigger printed, the answer the content script gets),     *
+ * What is here: the dialog result's dispatch (which button), the form values read back from formData, the empty-title rule, the tag csv, the date  *
+ * and time validation (Cockpit's parseAlarmFields), the due timestamp, the day start time, the notebook paths and the notebook default order, the  *
+ * create plan the host executes, the selection route's rules (the title/text split, the In this note choices and their default, the link, the edit *
+ * the host makes in the note), the trigger route's (its two choices, their labels with the trigger printed, the answer the content script gets),   *
  * edit mode's (the prefill from the note, the Due split back into its fields, the "what changed" diff that Save writes), the reading of jot.open's *
- * arguments (brief section 6), the Open row's choices, the back link (Copy Note ID's placeholders, rendered for the note the user is in, and put  *
- * first or last in the body), and the small helpers the dialog's glue asks (the heading, the Due row text, the suggestion lists, the tag token).   *
+ * arguments (brief section 6), the Open row's choices, the Note Tabs row's (issue 7), the back link (Copy Note ID's placeholders, rendered for the *
+ * note the user is in, and put first or last in the body), and the small helpers the dialog's glue asks (the heading, the Due row text, the        *
+ * suggestion lists, the tag token).                                                                                                                *
  *                                                                                                                                                  *
  * CROSS-SCRIPT GLOBALS. In the dialog, window.SearchTokens (searchTokens.js, the filter rule copied from Cockpit) may load before or after this file:*
  * addScript appends plain <script> elements, which run in the order they finish loading. So it is looked up per call (searchTokens below), never     *
@@ -35,6 +36,8 @@
     var NO_NOTE_MESSAGE = 'Jot: this note no longer exists.'
     // A notebook picked from the lists Jot kept from its last start, deleted since (on another device): the form opens again to pick another.
     var NOTEBOOK_GONE_MESSAGE = 'Jot: that notebook no longer exists. Pick another one.'
+    // Pin asked for, and no Note Tabs to do it (not installed, or off): the note is created all the same. The host says it once a run (issue 7).
+    var NOTE_TABS_MISSING_MESSAGE = 'Jot: the note is created, but Note Tabs is not installed or is off, so it was not pinned.'
     var NO_DATE = 'No date'
     var DEFAULT_DAY_START = '09:00'
 
@@ -77,6 +80,18 @@
         no: 'Create the note and stay where you are',
         editor: 'Create the note and open it in the editor',
         window: 'Create the note and open it in a window of its own',
+    }
+
+    // The Note Tabs row (issue 7): pin the new note as a tab in the Note Tabs plugin (joplin.plugin.note.tabs), or leave Note Tabs as it is. The
+    // noteTabs setting is its default and says whether the row is drawn at all: NOTE_TABS_OFF (Not used, the setting's default) draws none, and
+    // Note Tabs is never called.
+    var NOTE_TABS_OFF = 'off'
+    var NOTE_TABS_PIN = 'pin'
+    var NOTE_TABS_NONE = 'none'
+    var NOTE_TABS_LABELS = { pin: 'Pin', none: "Don't pin" }
+    var NOTE_TABS_TITLES = {
+        pin: 'Create the note and pin it as a tab in Note Tabs',
+        none: 'Create the note and leave Note Tabs as it is',
     }
 
     // The Back link row: add a line linking to the note the user is in, or not. The setting backlink is its default (off); the line's text is the
@@ -151,6 +166,21 @@
         var list = openChoices(mobile)
         if (list.indexOf(value) >= 0) return value
         return value === OPEN_WINDOW ? OPEN_EDITOR : OPEN_NO
+    }
+
+    /** noteTabsChoices / noteTabsChoice ****************************************************************************************************************
+     * The Note Tabs row's buttons, Pin then Don't pin (issue 7), and the choice that holds among them: the value when it is one of them, else          *
+     * `fallback` when it is (the setting's Pin or Don't pin), else Don't pin, so nothing is pinned that was not asked for.                             *
+     ***************************************************************************************************************************************************/
+    function noteTabsChoices(){
+        return [NOTE_TABS_PIN, NOTE_TABS_NONE]
+    }
+
+    function noteTabsChoice(value, fallback){
+        var list = noteTabsChoices()
+        if (list.indexOf(value) >= 0) return value
+        if (list.indexOf(fallback) >= 0) return fallback
+        return NOTE_TABS_NONE
     }
 
     /** backlinkText ************************************************************************************************************************************
@@ -235,6 +265,7 @@
             inThisNote: text(form.inThisNote),
             backlink: text(form.backlink),
             open: text(form.open),
+            noteTabs: text(form.noteTabs),
         }
     }
 
@@ -415,20 +446,23 @@
     }
 
     /** planCreate **************************************************************************************************************************************
-     * Turns a dialog result into what the host does, with no I/O, so every rule is decided here:                                                        *
-     *   { kind: 'none' }       Cancel, Escape, or a result with no button.                                                                              *
-     *   { kind: 'nothing' }    Create with an empty Title and an empty Text: nothing is created, the form just closes.                                  *
-     *   { kind: 'invalidDue' } a to-do whose Due fields cannot be read: Create is refused with DUE_MESSAGE and the form reopens with its values.        *
-     *   { kind: 'create', note, tags, open }  the POST notes payload, the tag titles to attach, and where to open the note: '' (stay), 'editor' or      *
-     *                          'window', from the Open row (openChoice: a result without the field reads as options.openDefault).                     *
-     * Create with both fields empty and the Open row on the editor or a window creates the empty note and opens it (Joplin's own New note, one step     *
-     * later); with Open on No it creates nothing. A note has no due date, so its Due fields are neither read nor validated (switching to Note clears    *
-     * nothing in the form, but writes none of it). options: { defaultType, dayStart, notebookId, inThisNoteChoices, inThisNoteDefault, mobile,           *
-     * openDefault, backlink } - the type a result without one reads as, the day start time, the notebook used when the form sent none, the In this note *
-     * choices the form offered (the selection and trigger routes) and the route's default choice, whether the Open row offered no window, the Open     *
-     * row's default, and the back link the form offered ({ text, position, on }, or null with no note to link back to). The plan's inThisNote is the    *
-     * choice to apply, one of those offered (anything else reads as the route's default, inThisNoteAction), or null on a route that offered none. The   *
-     * back link goes into the body (composeBody) when the Back link row says Add (a result without the field reads as backlink.on).                      *
+     * Turns a dialog result into what the host does, with no I/O, so every rule is decided here:                                                       *
+     *   { kind: 'none' }       Cancel, Escape, or a result with no button.                                                                             *
+     *   { kind: 'nothing' }    Create with an empty Title and an empty Text: nothing is created, the form just closes.                                 *
+     *   { kind: 'invalidDue' } a to-do whose Due fields cannot be read: Create is refused with DUE_MESSAGE and the form reopens with its values.       *
+     *   { kind: 'create', note, tags, open, pin }  the POST notes payload, the tag titles to attach, where to open the note: '' (stay), 'editor' or    *
+     *                          'window', from the Open row (openChoice: a result without the field reads as options.openDefault), and whether to pin   *
+     *                          it in Note Tabs, from the Note Tabs row (noteTabsChoice: a result without the field reads as options.noteTabsDefault).  *
+     * Create with both fields empty and the Open row on the editor or a window creates the empty note and opens it (Joplin's own New note, one step    *
+     * later); with Open on No it creates nothing, whatever the Note Tabs row says. A note has no due date, so its Due fields are neither read nor      *
+     * validated (switching to Note clears nothing in the form, but writes none of it). options: { defaultType, dayStart, notebookId,                   *
+     * inThisNoteChoices, inThisNoteDefault, mobile, openDefault, noteTabsDefault, backlink } - the type a result without one reads as, the day start   *
+     * time, the notebook used when the form sent none, the In this note choices the form offered (the selection and trigger routes) and the route's    *
+     * default choice, whether the Open row offered no window, the Open row's default, the Note Tabs row's default ('pin' or 'none'; '' when the        *
+     * setting is Not used and the form drew no row, so nothing is pinned whatever the result says), and the back link the form offered ({ text,        *
+     * position, on }, or null with no note to link back to). The plan's inThisNote is the choice to apply, one of those offered (anything else reads   *
+     * as the route's default, inThisNoteAction), or null on a route that offered none. The back link goes into the body (composeBody) when the Back    *
+     * link row says Add (a result without the field reads as backlink.on).                                                                             *
      ***************************************************************************************************************************************************/
     function planCreate(result, options){
         var settings = options || {}
@@ -444,10 +478,13 @@
         var choices = Array.isArray(settings.inThisNoteChoices) ? settings.inThisNoteChoices : []
         var offered = settings.backlink && text(settings.backlink.text) ? settings.backlink : null
         var linkBack = !!offered && (values.backlink ? values.backlink === BACKLINK_ADD : !!offered.on)
+        // No row drawn (the setting is Not used): nothing is pinned, whatever the result carries.
+        var tabsDefault = noteTabsChoices().indexOf(settings.noteTabsDefault) >= 0 ? settings.noteTabsDefault : ''
         return {
             kind: 'create',
             values: values,
             open: open === OPEN_NO ? '' : open,
+            pin: !!tabsDefault && noteTabsChoice(values.noteTabs || tabsDefault, tabsDefault) === NOTE_TABS_PIN,
             inThisNote: choices.length ? inThisNoteAction(values.inThisNote, choices, settings.inThisNoteDefault) : null,
             note: {
                 parent_id: values.notebookId || text(settings.notebookId),
@@ -809,6 +846,7 @@
         NO_NOTEBOOK_MESSAGE: NO_NOTEBOOK_MESSAGE,
         NO_NOTE_MESSAGE: NO_NOTE_MESSAGE,
         NOTEBOOK_GONE_MESSAGE: NOTEBOOK_GONE_MESSAGE,
+        NOTE_TABS_MISSING_MESSAGE: NOTE_TABS_MISSING_MESSAGE,
         NO_DATE: NO_DATE,
         DEFAULT_DAY_START: DEFAULT_DAY_START,
         KEEP: KEEP,
@@ -821,6 +859,11 @@
         OPEN_WINDOW: OPEN_WINDOW,
         OPEN_LABELS: OPEN_LABELS,
         OPEN_TITLES: OPEN_TITLES,
+        NOTE_TABS_OFF: NOTE_TABS_OFF,
+        NOTE_TABS_PIN: NOTE_TABS_PIN,
+        NOTE_TABS_NONE: NOTE_TABS_NONE,
+        NOTE_TABS_LABELS: NOTE_TABS_LABELS,
+        NOTE_TABS_TITLES: NOTE_TABS_TITLES,
         BACKLINK_ADD: BACKLINK_ADD,
         BACKLINK_NONE: BACKLINK_NONE,
         BACKLINK_LABELS: BACKLINK_LABELS,
@@ -833,6 +876,8 @@
         appliesFor: appliesFor,
         openChoices: openChoices,
         openChoice: openChoice,
+        noteTabsChoices: noteTabsChoices,
+        noteTabsChoice: noteTabsChoice,
         backlinkText: backlinkText,
         composeBody: composeBody,
         triggerShortLabels: triggerShortLabels,

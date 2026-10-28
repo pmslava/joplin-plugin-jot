@@ -12,7 +12,7 @@
 // opens; the selection route: the prefill, the In this note row and its memory, the edit in the editor and
 // its place in the call order; the typed trigger: the content script's registration and the plugin's handler
 // of its messages; edit mode and jot.open's arguments: the second dialog, the prefill, the one PUT of what
-// changed, the tag diff, the note list's item), every rule of the pure src/form/formModel.js and src/form/triggerRule.js, the content
+// changed, the tag diff, the note list's item; the Note Tabs row and its pin, issue 7), every rule of the pure src/form/formModel.js and src/form/triggerRule.js, the content
 // script itself run in Node against a real CodeMirror EditorState (a stand-in for the view: there is no DOM
 // here), the copies from Cockpit, the dialog glue's shape, and the sandbox proxy rule over every source file.
 
@@ -54,7 +54,7 @@ async function check(name, fn) {
 //   folders, tags                what GET folders / GET tags page through, `pageSize` items a page
 //   selectedNote, selectedFolder what joplin.workspace answers
 //   dialogResults                what dialogs.open answers, in order (then Cancel); openDialog overrides it
-//   executeThrows                command names whose commands.execute rejects
+//   executeThrows                command names whose commands.execute rejects, with Joplin's "Command not found: <name>"
 //   executeResults               what commands.execute answers, by command name (a function is called with the args);
 //                                anything not listed answers undefined, so selectedText reads as no selection by default
 //   globalSettings               what joplin.settings.globalValue() answers (editor.codeView is true, the Markdown
@@ -740,11 +740,11 @@ async function main() {
     })
 
     // ---------------------------------------------------------------- settings and the toolbar gate
-    await check('settings: section Jot with exactly defaultType, defaultNotebook, textNotebook, tagsFrom, backlinkFor, backlinkTemplate, backlinkPosition, openAfterCreate, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton on screen, and 0.2.0\'s copyTags and backlink hidden', () => {
+    await check('settings: section Jot with exactly defaultType, defaultNotebook, textNotebook, tagsFrom, backlinkFor, backlinkTemplate, backlinkPosition, openAfterCreate, noteTabs, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton on screen, and 0.2.0\'s copyTags and backlink hidden', () => {
         assert.deepStrictEqual(desktop.sections.map(section => [section.name, section.spec.label]), [['jot', 'Jot']])
         const specs = desktop.settingSpecs
         assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'defaultNotebook', 'textNotebook', 'tagsFrom', 'backlinkFor', 'backlinkTemplate', 'backlinkPosition',
-            'openAfterCreate', 'selectionAction', 'trigger', 'triggerAction', 'dayStartTime', 'showToolbarButton', 'copyTags', 'backlink', 'listCache'],
+            'openAfterCreate', 'noteTabs', 'selectionAction', 'trigger', 'triggerAction', 'dayStartTime', 'showToolbarButton', 'copyTags', 'backlink', 'listCache'],
             'every selector has its default on screen (issue 5); the 0.2.0 switches hidden, kept for the carry-over (issue 6); the stored lists hidden')
         const hidden = ['copyTags', 'backlink', 'listCache']
         for (const key of Object.keys(specs)) {
@@ -969,7 +969,7 @@ async function main() {
         })
         const noteId = outcome && outcome.id
         assert.ok(noteId, 'the command resolves with the new note id')
-        assert.deepStrictEqual(outcome, { id: noteId, opened: false })
+        assert.deepStrictEqual(outcome, { id: noteId, opened: false, pinned: false })
         assert.deepStrictEqual(state.dataPosts, [
             { path: ['notes'], query: null, body: { parent_id: 'fProj', is_todo: 1, title: 'Call the bank', body: 'about the card', todo_due: new Date(2026, 9, 14, 10, 30, 0, 0).getTime() } },
             { path: ['tags', 'tWork', 'notes'], query: null, body: { id: noteId } },
@@ -1005,7 +1005,7 @@ async function main() {
     await check('Create and open: opens the new note in the editor (openNote with its id)', async () => {
         const { state, outcome } = await openFormWith({ dialogResults: [formResult('ok', { open: 'editor',  title: 'Open me' })] })
         assert.deepStrictEqual(state.executes, [READ_SELECTION, { name: 'openNote', args: [outcome.id] }])
-        assert.deepStrictEqual(outcome, { id: outcome.id, opened: true })
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: true, pinned: false })
     })
 
     await check('Open: New window runs openNoteInNewWindow; when that throws, openNote with one console warning; mobile offers no window and opens in the editor', async () => {
@@ -1134,7 +1134,7 @@ async function main() {
         const { state, outcome } = await openSelectionWith('Call the bank\nabout the card', {
             dialogResults: [formResult('ok', { title: ' Call the [bank] ', body: 'about the card', tags: 'work, new one', inThisNote: 'replace' })],
         })
-        assert.deepStrictEqual(outcome, { id: outcome.id, opened: false })
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: false, pinned: false })
         assert.deepStrictEqual(state.timeline, [
             'execute selectedText', 'POST notes', 'execute insertText',
             'POST tags/tWork/notes', 'POST tags', 'POST tags/tag0002/notes',
@@ -1159,13 +1159,13 @@ async function main() {
         ], 'Create and open: the edit reaches the note the selection came from before the tags and before the editor switches')
         assert.deepStrictEqual(several.state.executes[1].args, [`Pay rent\nby Friday\n[Rent](:/${several.outcome.id})`])
         assert.deepStrictEqual(several.state.executes[2], { name: 'openNote', args: [several.outcome.id] })
-        assert.deepStrictEqual(several.outcome, { id: several.outcome.id, opened: true })
+        assert.deepStrictEqual(several.outcome, { id: several.outcome.id, opened: true, pinned: false })
     })
 
     await check('selection route, keep: no edit at all; Create and open opens the new note; replace with an empty Title links the title the empty-title rule gave', async () => {
         const keep = await openSelectionWith('Idea\nmore', { dialogResults: [formResult('ok', { open: 'editor',  title: 'Idea', body: 'more', inThisNote: 'keep' })] })
         assert.deepStrictEqual(keep.state.timeline, ['execute selectedText', 'POST notes', 'execute openNote'])
-        assert.deepStrictEqual(keep.outcome, { id: keep.outcome.id, opened: true })
+        assert.deepStrictEqual(keep.outcome, { id: keep.outcome.id, opened: true, pinned: false })
         const missing = await openSelectionWith('Idea', { dialogResults: [formResult('ok', { title: 'Idea' })] })
         assert.deepStrictEqual(missing.state.timeline, ['execute selectedText', 'POST notes', 'execute insertText'],
             'a result without the field is the route\'s default, replace')
@@ -1225,7 +1225,7 @@ async function main() {
         const { state, outcome } = await openSelectionWith('Idea', {
             executeThrows: ['insertText'], dialogResults: [formResult('ok', { open: 'editor',  title: 'Idea', inThisNote: 'replace' })],
         })
-        assert.deepStrictEqual(outcome, { id: outcome.id, opened: true })
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: true, pinned: false })
         assert.deepStrictEqual(state.timeline, ['execute selectedText', 'POST notes', 'execute insertText', 'execute openNote'])
         assert.strictEqual(state.warnings.length, 1)
         assert.ok(state.warnings[0].startsWith('Jot: could not change the highlighted text (insertText)'), state.warnings[0])
@@ -1257,7 +1257,7 @@ async function main() {
             postThrows: (pathParts, body) => pathParts.length === 1 && pathParts[0] === 'tags' && body.title === 'first',
             dialogResults: [formResult('ok', { open: 'editor',  title: 'Idea', tags: 'first, second, work', inThisNote: 'replace' })],
         })
-        assert.deepStrictEqual(refused.outcome, { id: refused.outcome.id, opened: true }, 'the command resolves, it does not throw')
+        assert.deepStrictEqual(refused.outcome, { id: refused.outcome.id, opened: true, pinned: false }, 'the command resolves, it does not throw')
         assert.deepStrictEqual(refused.state.timeline, [
             'execute selectedText', 'POST notes', 'execute insertText',
             'POST tags', 'POST tags', 'POST tags/tag0002/notes', 'POST tags/tWork/notes', 'execute openNote',
@@ -1589,7 +1589,7 @@ async function main() {
         assert.deepStrictEqual(outcome, { id: 'nEdit', changed: ['title', 'todo_due'] })
     })
 
-    await check('jot.open { mode: \'new\' } honours each preset - type, title, body, notebookId - on the caller\'s route: no selection read, no In this note row; resolves { id, opened }; presets of the wrong shape are passed over', async () => {
+    await check('jot.open { mode: \'new\' } honours each preset - type, title, body, notebookId - on the caller\'s route: no selection read, no In this note row; resolves { id, opened, pinned }; presets of the wrong shape are passed over', async () => {
         const state = await runBundle({ ...FORM_BASE, executeResults: { selectedText: 'highlighted' },
             dialogResults: [formResult('ok', { type: 'note', title: 'From Cockpit', body: 'line one\nline two', notebookId: 'fHome' })] })
         const open = state.commands.find(item => item.name === 'jot.open')
@@ -1601,13 +1601,13 @@ async function main() {
         assert.ok(/<input type="text" id="jotNotebook"[^>]*value="home"/.test(html) && islandOf(html).data.defaults.notebookId === 'fHome', 'notebookId, over the editor note\'s Work')
         assert.ok(!html.includes('jotInThisNoteRow'), 'no In this note row, though text is highlighted')
         assert.deepStrictEqual([state.executes, state.workspaceCalls, state.dialogCreates], [[], [], ['jot.form']], 'no selection read, no workspace read: the caller\'s notebook is known')
-        assert.deepStrictEqual(outcome, { id: outcome.id, opened: false })
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: false, pinned: false })
         assert.deepStrictEqual(notePosts(state).map(post => post.body), [{ parent_id: 'fHome', is_todo: 0, title: 'From Cockpit', body: 'line one\nline two', todo_due: 0 }])
         // A to-do over a note setting; Create and open opens.
         const todo = await runBundle({ ...FORM_BASE, settings: { defaultType: 'note' }, dialogResults: [formResult('ok', { open: 'editor',  title: 'Task' })] })
         const opened = await withWarnings(todo, () => todo.commands.find(item => item.name === 'jot.open').execute({ mode: 'new', type: 'todo' }))
         assert.ok(todo.dialogHtml[0].includes('>New to-do</strong>'))
-        assert.deepStrictEqual(opened, { id: opened.id, opened: true })
+        assert.deepStrictEqual(opened, { id: opened.id, opened: true, pinned: false })
         assert.deepStrictEqual(todo.executes, [{ name: 'openNote', args: [opened.id] }])
         // Wrong shapes: the setting's type, empty fields, the current notebook.
         const odd = await runBundle({ ...FORM_BASE })
@@ -2636,7 +2636,7 @@ async function main() {
         await withWarnings(state, () => state.commands.find(item => item.name === 'jot.open').execute())
         assert.strictEqual(atOpen, afterStartup, 'no list read between the tap and the form')
         const formKeys = ['defaultType', 'dayStartTime', 'defaultNotebook', 'textNotebook', 'tagsFrom', 'backlinkFor', 'backlinkTemplate',
-            'backlinkPosition', 'openAfterCreate', 'selectionAction', 'triggerAction']
+            'backlinkPosition', 'openAfterCreate', 'noteTabs', 'selectionAction', 'triggerAction']
         assert.deepStrictEqual(state.settingBatches, [[...formKeys, 'showToolbarButton', 'copyTags', 'backlink', 'listCache']],
             'every setting the start and the form need, in one call at startup, which the form opens on')
         assert.deepStrictEqual(state.settingReads, [], 'and no single reads')
@@ -2691,14 +2691,22 @@ async function main() {
         assert.strictEqual(islandOf(state.dialogHtml[0]).data.timing, null)
     })
 
-    await check('popup: one line per selector in the order Type, Title, Text, Notebook, Tags, In this note, Back link, Open, Due (last); a keyboard hint in the heading on desktop only', async () => {
+    await check('popup: one line per selector in the order Type, Title, Text, Notebook, Tags, In this note, Back link, Open, Note Tabs (when its setting is on), Due (last); a keyboard hint in the heading on desktop only', async () => {
         const { state } = await openSelectionWith('Pay rent', { selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never' } })
         const html = state.dialogHtml[0]
         const order = ['jotTypeRow', 'id="jotTitle"', 'id="jotBody"', 'id="jotNotebook"', 'id="jotTags"', 'jotInThisNoteRow', 'jotBacklinkRow', 'jotOpenRow', 'jotDueRow', 'id="jotPicker"']
         const positions = order.map(marker => html.indexOf(marker))
         assert.ok(positions.every(at => at >= 0), JSON.stringify(order.filter((marker, index) => positions[index] < 0)))
         assert.deepStrictEqual(positions.slice().sort((a, b) => a - b), positions, 'in that order')
-        assert.strictEqual((html.match(/class="jot-seg[ "]/g) || []).length, 4, 'four selectors')
+        assert.strictEqual((html.match(/class="jot-seg[ "]/g) || []).length, 4, 'four selectors: no Note Tabs row by default')
+        assert.ok(!html.includes('jotNoteTabsRow'))
+        const tabs = await openSelectionWith('Pay rent', { selectedNote: OPEN_NOTE, settings: { tagsFrom: 'never', noteTabs: 'pin' } })
+        const tabsHtml = tabs.state.dialogHtml[0]
+        const tabsOrder = [...order.slice(0, 8), 'jotNoteTabsRow', ...order.slice(8)]
+        const tabsPositions = tabsOrder.map(marker => tabsHtml.indexOf(marker))
+        assert.ok(tabsPositions.every(at => at >= 0), JSON.stringify(tabsOrder.filter((marker, index) => tabsPositions[index] < 0)))
+        assert.deepStrictEqual(tabsPositions.slice().sort((a, b) => a - b), tabsPositions, 'Note Tabs after Open, before Due')
+        assert.strictEqual((tabsHtml.match(/class="jot-seg[ "]/g) || []).length, 5, 'five selectors with the setting on')
         assert.ok(html.includes('<span class="jot-hint" aria-hidden="true">Enter creates · Esc cancels</span>'))
         const phone = await openFormWith({ versionInfo: MOBILE })
         assert.ok(!phone.state.dialogHtml[0].includes('jot-hint'))
@@ -2723,7 +2731,7 @@ async function main() {
     await check('selection guard: a Create whose tag makes Joplin select the new note opens the note being read again, with its scroll, caret and focus', async () => {
         const editor = guardedEditor()
         const { state, outcome } = await openFormWith({ ...editor.fixture, dialogResults: [formResult('ok', { title: 'Call the bank', tags: 'work' })] })
-        assert.deepStrictEqual(outcome, { id: 'note0001', opened: false }, 'resolves as a plain Create')
+        assert.deepStrictEqual(outcome, { id: 'note0001', opened: false, pinned: false }, 'resolves as a plain Create')
         assert.deepStrictEqual(editor.opens, ['nRead'], 'the note being read, opened once; the new note never by Jot')
         assert.deepStrictEqual(editor.setViews[0], HELD_VIEW, 'the view held before the tag write')
         assert.deepStrictEqual(editor.view(), HELD_VIEW, 'scroll, caret and focus as they were')
@@ -2766,7 +2774,7 @@ async function main() {
         assert.deepStrictEqual(user.opens, [], 'a multi-selection is not undone')
         const refused = guardedEditor({ openThrows: true })
         const failed = await openFormWith({ ...refused.fixture, dialogResults: [formResult('ok', { title: 'Gone', tags: 'work' })] })
-        assert.deepStrictEqual(failed.outcome, { id: 'note0001', opened: false })
+        assert.deepStrictEqual(failed.outcome, { id: 'note0001', opened: false, pinned: false })
         assert.deepStrictEqual(refused.opens, ['nRead'], 'tried once, not again')
         assert.ok(failed.state.warnings.some(line => line.startsWith('Jot: Joplin moved off the note you were reading and it could not be opened again')), failed.state.warnings.join(' | '))
     })
@@ -3134,6 +3142,168 @@ async function main() {
         const init = glue.slice(glue.indexOf('function initJotFormIfNeeded'))
         assert.ok(/jotSetupAt = Date\.now\(\)\n\s*jotShownAt = 0\n\s*showJotTiming\(\)\n\s*showJotForm\(\)/.test(init), 'checked when the form is set up')
         assert.ok(glue.includes("window.addEventListener('resize', showJotForm)"), 'and at every resize')
+    })
+
+    // ---------------------------------------------------------------- issue 7: Note Tabs
+    // The Note Tabs plugin (joplin.plugin.note.tabs) pins a note with its tabsPinNote command, given an array of note ids. The stub's executeThrows
+    // answers "Command not found: <name>", as Joplin does for a command no plugin declares; executeResults can throw anything else.
+    const pinsOf = (state) => state.executes.filter(call => call.name === 'tabsPinNote')
+    const MISSING_LINE = 'Jot: Note Tabs is not installed or is off, so the new note is not pinned'
+
+    await check('issue 7: the setting "Pin the new note in Note Tabs" - Not used (the default), Pin, Don\'t pin - is public in the Jot section, right after "Open the new note"', () => {
+        const specs = desktop.settingSpecs
+        const spec = specs.noteTabs
+        assert.deepStrictEqual({ label: spec.label, description: spec.description, value: spec.value, type: spec.type, isEnum: spec.isEnum, options: spec.options, public: spec.public, section: spec.section }, {
+            label: 'Pin the new note in Note Tabs',
+            description: 'Needs the Note Tabs plugin. Pin, or Don\'t pin: the form gets a Note Tabs row that starts there, and you can switch it in the form. Not used: no row, and Note Tabs is never called.',
+            value: 'off', type: 2, isEnum: true, options: { off: 'Not used', pin: 'Pin', none: 'Don\'t pin' }, public: true, section: 'jot',
+        })
+        assert.deepStrictEqual(Object.keys(spec.options), ['off', 'pin', 'none'], 'Not used first, then Pin, then Don\'t pin')
+        const keys = Object.keys(specs)
+        assert.strictEqual(keys.indexOf('noteTabs'), keys.indexOf('openAfterCreate') + 1, 'under "Open the new note" on the Settings screen')
+        assert.deepStrictEqual([FormModel.NOTE_TABS_OFF, FormModel.NOTE_TABS_PIN, FormModel.NOTE_TABS_NONE], Object.keys(spec.options), 'the model\'s values are the setting\'s')
+    })
+
+    await check('issue 7: by default (Not used) the form has no Note Tabs row and Create never calls Note Tabs, even when a result carries noteTabs; it resolves pinned: false', async () => {
+        const { state, outcome } = await openFormWith({ dialogResults: [formResult('ok', { title: 'Plain', noteTabs: 'pin' })] })
+        const html = state.dialogHtml[0]
+        assert.ok(!html.includes('jotNoteTabsRow') && !html.includes('data-field="noteTabs"') && !html.includes('name="noteTabs"'), 'no row, no field')
+        assert.deepStrictEqual(pinsOf(state), [], 'a stray field in the result changes nothing')
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: false, pinned: false })
+        assert.strictEqual(notePosts(state).length, 1)
+        const phone = await openFormWith({ versionInfo: MOBILE })
+        assert.ok(!phone.state.dialogHtml[0].includes('jotNoteTabsRow'), 'nor on mobile')
+    })
+
+    await check('issue 7: with the setting on Pin the form has a Note Tabs row - Pin selected, then Don\'t pin, each with its tooltip, built like the Open row - on desktop and on mobile; on Don\'t pin it starts there', async () => {
+        const groupOf = (html) => (/data-field="noteTabs">([\s\S]*?)<\/div>/.exec(html) || [])[1] || ''
+        const labelsOf = (html) => (groupOf(html).match(/>([^<]+)<\/button>/g) || []).map(label => label.slice(1, -9))
+        const titlesOf = (html) => (groupOf(html).match(/ title="([^"]*)"/g) || []).map(match => match.slice(8, -1))
+        for (const versionInfo of [DESKTOP, MOBILE]) {
+            const { state } = await openFormWith({ versionInfo, settings: { noteTabs: 'pin' } })
+            const html = state.dialogHtml[0]
+            const where = versionInfo.platform
+            assert.strictEqual(segValue(html, 'jotNoteTabs'), 'pin', `${where}: starts on Pin`)
+            assert.deepStrictEqual(labelsOf(html), ['Pin', 'Don&#39;t pin'], `${where}: Pin, then Don't pin`)
+            assert.deepStrictEqual(titlesOf(html), ['Create the note and pin it as a tab in Note Tabs', 'Create the note and leave Note Tabs as it is'], `${where}: the tooltips`)
+            assert.ok(/<button type="button" class="jot-seg-option -selected" data-value="pin" role="radio" aria-checked="true" tabindex="0"/.test(groupOf(html)), `${where}: Pin is the selected radio`)
+            assert.ok(html.includes('<div class="jot-row" id="jotNoteTabsRow">') && html.includes('<span class="jot-label" id="jotNoteTabsLabel">Note Tabs</span>'), `${where}: the row and its label`)
+            assert.ok(html.includes('<div class="jot-seg" role="radiogroup" aria-labelledby="jotNoteTabsLabel" data-field="noteTabs">'), `${where}: the classes of the Open row (no -fill)`)
+            assert.ok(html.includes('<div class="jot-seg" role="radiogroup" aria-labelledby="jotOpenLabel" data-field="open">'))
+            assert.ok(html.indexOf('jotOpenRow') < html.indexOf('jotNoteTabsRow') && html.indexOf('jotNoteTabsRow') < html.indexOf('jotDueRow'), `${where}: after Open, before Due`)
+        }
+        const none = await openFormWith({ settings: { noteTabs: 'none' } })
+        assert.strictEqual(segValue(none.state.dialogHtml[0], 'jotNoteTabs'), 'none', 'Don\'t pin')
+        assert.ok(/data-value="none" role="radio" aria-checked="true"/.test(none.state.dialogHtml[0]))
+        const odd = await openFormWith({ settings: { noteTabs: 'sometimes' } })
+        assert.ok(!odd.state.dialogHtml[0].includes('jotNoteTabsRow'), 'a value the setting does not offer is Not used')
+    })
+
+    await check('issue 7: Create with Pin runs tabsPinNote with [[id]] - an array of the new note\'s id - after POST notes and the tags and before openNote, and resolves { id, opened, pinned: true }', async () => {
+        const { state, outcome } = await openFormWith({ settings: { noteTabs: 'pin' }, dialogResults: [formResult('ok', { title: 'Pinned', tags: 'work, fresh', open: 'editor', noteTabs: 'pin' })] })
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: true, pinned: true })
+        assert.deepStrictEqual(pinsOf(state), [{ name: 'tabsPinNote', args: [[outcome.id]] }], 'one call, the id in an array (a bare string would be read character by character)')
+        assert.deepStrictEqual(state.timeline, ['execute selectedText', 'POST notes', 'POST tags/tWork/notes', 'POST tags', 'POST tags/tag0002/notes', 'execute tabsPinNote', 'execute openNote'],
+            'the note exists (Note Tabs reads it first), the tags are written, then the pin, then the open')
+        const pinAt = state.callLog.indexOf('commands.execute tabsPinNote')
+        assert.ok(pinAt > state.callLog.lastIndexOf('data.get tags') && pinAt < state.callLog.indexOf('commands.execute openNote'), 'after the tag list read for the tags, before the open')
+        assert.deepStrictEqual(state.messageBoxes, [])
+        assert.deepStrictEqual(state.warnings, [])
+        const stay = await openFormWith({ settings: { noteTabs: 'pin' }, dialogResults: [formResult('ok', { title: 'Pinned, not opened' })] })
+        assert.deepStrictEqual(stay.outcome, { id: stay.outcome.id, opened: false, pinned: true }, 'a result without the field takes the setting')
+        assert.deepStrictEqual(stay.state.timeline, ['execute selectedText', 'POST notes', 'execute tabsPinNote'], 'nothing opened')
+        const selection = await openSelectionWith('Pay rent', { settings: { noteTabs: 'pin' }, dialogResults: [formResult('ok', { title: 'Pay rent', tags: 'work', inThisNote: 'replace' })] })
+        assert.deepStrictEqual(selection.state.timeline, ['execute selectedText', 'POST notes', 'execute insertText', 'POST tags/tWork/notes', 'execute tabsPinNote'],
+            'the selection route: the edit, the tags, then the pin')
+        assert.strictEqual(selection.outcome.pinned, true)
+        const caller = await runBundle({ ...FORM_BASE, settings: { noteTabs: 'pin' }, dialogResults: [formResult('ok', { title: 'From Cockpit' })] })
+        const called = await withWarnings(caller, () => caller.commands.find(item => item.name === 'jot.open').execute({ mode: 'new', title: 'From Cockpit' }))
+        assert.deepStrictEqual(called, { id: called.id, opened: false, pinned: true }, 'another plugin\'s jot.open learns that the note was pinned')
+        assert.ok(caller.dialogHtml[0].includes('jotNoteTabsRow'), 'and its form has the row')
+    })
+
+    await check('issue 7: Don\'t pin, in the form or as the setting with a result that carries no field, runs no tabsPinNote and resolves pinned: false', async () => {
+        const clicked = await openFormWith({ settings: { noteTabs: 'pin' }, dialogResults: [formResult('ok', { title: 'Left alone', noteTabs: 'none' })] })
+        assert.deepStrictEqual(pinsOf(clicked.state), [])
+        assert.deepStrictEqual(clicked.outcome, { id: clicked.outcome.id, opened: false, pinned: false })
+        const setting = await openFormWith({ settings: { noteTabs: 'none' }, dialogResults: [formResult('ok', { title: 'Left alone too', open: 'editor' })] })
+        assert.deepStrictEqual(pinsOf(setting.state), [])
+        assert.deepStrictEqual(setting.outcome, { id: setting.outcome.id, opened: true, pinned: false })
+        const chosen = await openFormWith({ settings: { noteTabs: 'none' }, dialogResults: [formResult('ok', { title: 'Pinned after all', noteTabs: 'pin' })] })
+        assert.deepStrictEqual(pinsOf(chosen.state), [{ name: 'tabsPinNote', args: [[chosen.outcome.id]] }], 'Pin picked in the form over the setting\'s Don\'t pin')
+        const empty = await openFormWith({ settings: { noteTabs: 'pin' }, dialogResults: [formResult('ok', { title: '', body: '  ', noteTabs: 'pin', open: 'no' })] })
+        assert.deepStrictEqual([empty.outcome, notePosts(empty.state).length, pinsOf(empty.state).length], [null, 0, 0], 'an empty Create with Open on No creates nothing, Pin or not')
+    })
+
+    await check('issue 7: Note Tabs not installed or off (Joplin\'s "Command not found", or "without a runtime"): the note is created and pinned: false, a console warning every time, and the message once a run', async () => {
+        const state = await runBundle({ ...FORM_BASE, settings: { noteTabs: 'pin' }, executeThrows: ['tabsPinNote'],
+            dialogResults: [formResult('ok', { title: 'First' }), formResult('ok', { title: 'Second', open: 'editor' })] })
+        const open = state.commands.find(item => item.name === 'jot.open')
+        const first = await withWarnings(state, () => open.execute())
+        const second = await withWarnings(state, () => open.execute())
+        assert.deepStrictEqual([first, second], [{ id: first.id, opened: false, pinned: false }, { id: second.id, opened: true, pinned: false }], 'both created, neither pinned')
+        assert.deepStrictEqual(notePosts(state).map(post => post.body.title), ['First', 'Second'])
+        assert.deepStrictEqual(state.messageBoxes, ['Jot: the note is created, but Note Tabs is not installed or is off, so it was not pinned.'], 'one message across two creates')
+        assert.strictEqual(FormModel.NOTE_TABS_MISSING_MESSAGE, state.messageBoxes[0], 'the model\'s string')
+        assert.deepStrictEqual(state.warnings.filter(line => line.startsWith(MISSING_LINE)).length, 2, 'a warning each time')
+        assert.strictEqual(state.timeline.slice(-2).join(' '), 'execute tabsPinNote execute openNote', 'the open still runs')
+        const unloaded = await openFormWith({ settings: { noteTabs: 'pin' }, executeResults: { tabsPinNote: () => { throw new Error('Cannot execute a command without a runtime: tabsPinNote') } },
+            dialogResults: [formResult('ok', { title: 'Third' })] })
+        assert.deepStrictEqual(unloaded.outcome, { id: unloaded.outcome.id, opened: false, pinned: false })
+        assert.deepStrictEqual(unloaded.state.messageBoxes, [FormModel.NOTE_TABS_MISSING_MESSAGE], 'declared but not running: the same message')
+        assert.ok(unloaded.state.warnings[0].startsWith(MISSING_LINE), unloaded.state.warnings[0])
+    })
+
+    await check('issue 7: any other refusal from Note Tabs (a note it cannot read, say) is a console warning and no message; the note stays created, pinned: false, and the open still runs', async () => {
+        const { state, outcome } = await openFormWith({ settings: { noteTabs: 'pin' }, executeResults: { tabsPinNote: () => { throw new Error('Not Found: notes/x') } },
+            dialogResults: [formResult('ok', { title: 'Refused', open: 'editor' })] })
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: true, pinned: false })
+        assert.deepStrictEqual(state.messageBoxes, [])
+        assert.strictEqual(state.warnings.length, 1)
+        assert.ok(state.warnings[0].startsWith('Jot: Note Tabs could not pin the note'), state.warnings[0])
+        assert.deepStrictEqual(state.timeline.slice(-2), ['execute tabsPinNote', 'execute openNote'])
+    })
+
+    await check('issue 7: edit mode draws no Note Tabs row and never pins, whatever the setting', async () => {
+        const { state, outcome } = await editWith({ settings: { noteTabs: 'pin' }, dialogResults: [editResult('ok', { title: 'Call the bank today', noteTabs: 'pin' })] })
+        assert.ok(!state.dialogHtml[0].includes('jotNoteTabsRow') && !state.dialogHtml[0].includes('name="noteTabs"'))
+        assert.deepStrictEqual(pinsOf(state), [])
+        assert.deepStrictEqual(outcome, { id: 'nEdit', changed: ['title'] })
+    })
+
+    await check('issue 7: formModel - noteTabsChoices, noteTabsChoice, and planCreate\'s pin: no default (the setting Not used) pins nothing whatever the result says, a missing field reads as the default, an empty Create with Open on No is still nothing', () => {
+        assert.deepStrictEqual(FormModel.noteTabsChoices(), ['pin', 'none'])
+        assert.deepStrictEqual(FormModel.NOTE_TABS_LABELS, { pin: 'Pin', none: 'Don\'t pin' })
+        assert.deepStrictEqual(FormModel.NOTE_TABS_TITLES, { pin: 'Create the note and pin it as a tab in Note Tabs', none: 'Create the note and leave Note Tabs as it is' })
+        assert.deepStrictEqual([['pin', 'none'], ['none', 'pin'], ['x', 'pin'], ['x', 'none'], ['', 'pin'], [undefined, ''], ['off', 'off']].map(([value, fallback]) => FormModel.noteTabsChoice(value, fallback)),
+            ['pin', 'none', 'pin', 'none', 'pin', 'none', 'none'])
+        const pin = (fields, noteTabsDefault) => FormModel.planCreate(formResult('ok', { title: 'A', ...fields }), { noteTabsDefault }).pin
+        assert.deepStrictEqual([pin({ noteTabs: 'pin' }, ''), pin({ noteTabs: 'pin' }, undefined), pin({ noteTabs: 'pin' }, 'off')], [false, false, false], 'no row offered: no pin')
+        assert.deepStrictEqual([pin({}, 'pin'), pin({}, 'none'), pin({ noteTabs: 'none' }, 'pin'), pin({ noteTabs: 'pin' }, 'none'), pin({ noteTabs: 'bogus' }, 'pin')], [true, false, false, true, true])
+        assert.strictEqual(FormModel.readFormValues(formResult('ok', { noteTabs: 'none' }).formData).noteTabs, 'none')
+        assert.strictEqual(FormModel.readFormValues({}).noteTabs, '')
+        assert.deepStrictEqual(FormModel.planCreate(formResult('ok', { title: ' ', body: '\n', noteTabs: 'pin', open: 'no' }), { noteTabsDefault: 'pin' }).kind, 'nothing')
+        assert.deepStrictEqual(FormModel.planCreate(formResult('ok', { title: '', body: '', open: 'editor' }), { noteTabsDefault: 'pin' }).pin, true, 'the empty note Open makes is pinned too')
+    })
+
+    await check('issue 7: with the setting on, the trigger route pins too - in createNote, before the answer, while its tags wait for the content script', async () => {
+        const { state, answer } = await fireTriggerWith({ settings: { noteTabs: 'pin' }, dialogResults: [formResult('ok', { title: 'Triggered', tags: 'work', inThisNote: 'link' })] })
+        assert.ok(state.dialogHtml[0].includes('jotNoteTabsRow'), 'the row on the trigger route')
+        const id = 'note0001'
+        assert.strictEqual(notePosts(state).length, 1)
+        assert.deepStrictEqual(answer, { action: 'link', link: `[Triggered](:/${id})` })
+        assert.deepStrictEqual(pinsOf(state), [{ name: 'tabsPinNote', args: [[id]] }])
+        await tick(40)
+        assert.deepStrictEqual(state.timeline, ['POST notes', 'execute tabsPinNote', 'POST tags/tWork/notes'], 'the pin right after the note; the tags later, after the answer')
+    })
+
+    await check('issue 7: a refused Create (an unreadable due) shows the form again on the Note Tabs choice as typed, not on the setting', async () => {
+        const { state } = await openFormWith({ settings: { noteTabs: 'pin' }, dialogResults: [formResult('ok', { title: 'Late', dueTime: '10:00', noteTabs: 'none' })] })
+        assert.deepStrictEqual(state.messageBoxes, [FormModel.DUE_MESSAGE], 'refused: a time with no date')
+        assert.strictEqual(state.dialogHtml.length, 2, 'the form again, then Cancel')
+        assert.strictEqual(segValue(state.dialogHtml[1], 'jotNoteTabs'), 'none', "Don't pin as typed, over the setting's Pin")
+        assert.deepStrictEqual(pinsOf(state), [], 'nothing pinned, nothing created')
+        assert.strictEqual(notePosts(state).length, 0)
     })
 
     // ---------------------------------------------------------------- the sandbox proxy rule

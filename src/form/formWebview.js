@@ -78,11 +78,13 @@ function readJotData(){
 }
 
 /** Selectors ***************************************************************************************************************************************
- * Every selector is a .jot-seg radiogroup (formHtml.ts, segmentRow): Type, In this note, Back link and Open. One tab stop, the selected button; the *
- * arrow keys move the choice, wrapping at both ends; the hidden input named after the group's data-field carries it, so Create sends it and a      *
- * refused Create reopens on it. setJotSeg is the one writer. A value the group does not offer resolves as each selector's rule says: Type as       *
- * formModel.normalizeType; In this note to the route's default when drawn (the island's fallback: replace on the selection route, link on the      *
- * trigger route, both drawn first), else the first button - formModel.inThisNoteAction's rule; the others to their first button.                 *
+ * Every selector is a .jot-seg radiogroup (formHtml.ts, segmentRow): Type, In this note, Back link, Open and Note Tabs. One tab stop, the selected *
+ * button; the arrow keys move the choice, wrapping at both ends; the hidden input named after the group's data-field carries it, so Create sends   *
+ * it and a refused Create reopens on it. setJotSeg is the one writer. A value the group does not offer resolves as each selector's rule says: Type *
+ * as formModel.normalizeType; In this note to the route's default when drawn (the island's fallback: replace on the selection route, link on the   *
+ * trigger route, both drawn first), else the first button - formModel.inThisNoteAction's rule; the others (Back link, Open, Note Tabs) to their    *
+ * first button. The markup starts every group on a button it offers (Note Tabs on its setting, formModel.noteTabsChoice), and a click or an arrow  *
+ * key only picks among them.                                                                                                                       *
  ***************************************************************************************************************************************************/
 function jotSegGroup(field){
     var form = jotForm()

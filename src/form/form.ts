@@ -5,8 +5,9 @@
  *                                                                                                                                                  *
  * THE COMMAND CONTRACT (brief section 6, formModel.openRequest). jot.open with { mode: 'edit', noteId } is edit mode and resolves { id, changed }  *
  * (the fields written, among title, parent_id, is_todo, todo_due, tags) or null; with { mode: 'new', type?, title?, body?, notebookId? } it is     *
- * create mode on the caller's route, those presets in the fields, no selection read and no In this note row, and resolves { id, opened } or null;  *
- * with no argument, or a mode the contract does not know, it is the shortcut's behaviour (openJot, the selection route when text is highlighted).  *
+ * create mode on the caller's route, those presets in the fields, no selection read and no In this note row, and resolves { id, opened, pinned }   *
+ * or null; with no argument, or a mode the contract does not know, it is the shortcut's behaviour (openJot, the selection route when text is       *
+ * highlighted).                                                                                                                                    *
  *                                                                                                                                                  *
  * EDIT MODE (brief 4.5). The form prefilled from GET notes/:id (title, is_todo, parent_id, todo_due) and GET notes/:id/tags: Type, Title,          *
  * Notebook, Tags and Due, no Text and no In this note, with Save and Cancel. Save writes only what changed (formModel.planEdit): one PUT notes/:id *
@@ -34,6 +35,12 @@
  * list's first note - the one just created; moving a listed note to another notebook selects its neighbour. So every tag write (Create's, Save's)    *
  * and every notebook change in edit mode is bracketed by holdSelection / keepSelection, which open the note being read again, with its scroll and     *
  * caret, when Joplin moved off it. Not when the note is about to be opened anyway (Create and open).                                               *
+ *                                                                                                                                                  *
+ * NOTE TABS (issue 7). With the noteTabs setting on Pin or Don't pin, create mode has a Note Tabs row that starts there (never edit mode, as       *
+ * Open). Pin runs the Note Tabs plugin's tabsPinNote with the new note's id once the note exists, after the tags (the trigger route writes its     *
+ * tags later) and before any open (pinInNoteTabs): Note Tabs adds the note as a pinned tab without opening it or moving the selection. No plugin   *
+ * can list the plugins installed, so nothing is asked at the start or before the form shows; a Pin that finds no Note Tabs still creates the note, *
+ * and says so once a run. The create result says whether the note was pinned (pinned).                                                             *
  *                                                                                                                                                  *
  * Every decision is formModel.js's (planCreate and the rules under it), so this file is the I/O around it: the notebooks and tags read from the     *
  * data API, the dialog, the POST notes, the tags (reused as Joplin matches titles, created when missing, attached; never fatal), and the open.     *
@@ -114,10 +121,12 @@ export interface FormPresets {
     editorNote?: any
 }
 
-// What the commands resolve in create mode (brief section 6).
+// What the commands resolve in create mode (brief section 6). pinned: Note Tabs pinned the new note (issue 7); false when no pin was asked or it
+// failed.
 export interface FormOutcome {
     id: string
     opened: boolean
+    pinned: boolean
 }
 
 // What jot.open resolves in edit mode (brief section 6): the note and the fields written, in formModel.planEdit's order.
@@ -144,6 +153,8 @@ interface Created {
     opened: boolean
     // Where the note opens ("editor" or "window"), "" when it does not.
     openTarget: string
+    // Whether Note Tabs pinned the note (pinInNoteTabs).
+    pinned: boolean
     inThisNote: string | null
     link: string
     openLater: boolean
@@ -239,12 +250,12 @@ export async function openJot(route: string): Promise<FormOutcome | null> {
  * Opens the form and applies what the user chose. `route` names the way in ("menu" for Tools > Jot… and its shortcut, "contextMenu" for the        *
  * editor's right-click menu, "button" for the toolbar, "caller" for another plugin's { mode: 'new' }, all four the same plain form; "selection"    *
  * for highlighted text, which adds the In this note row). `presets` fill the fields: type, title, body, notebookId (passed over when it is not a   *
- * notebook). Resolves { id, opened } when a note was created, null when nothing was (Cancel, Escape, an empty Create, no notebook to create in, or *
- * a form already open).                                                                                                                            *
+ * notebook). Resolves { id, opened, pinned } when a note was created (pinned: true only when Note Tabs pinned it), null when nothing was (Cancel,  *
+ * Escape, an empty Create, no notebook to create in, or a form already open).                                                                      *
  ***************************************************************************************************************************************************/
 export async function openForm(route: string, presets: FormPresets = {}): Promise<FormOutcome | null> {
     const created = await withFormOpen(() => runForm(route, presets || {}))
-    return created ? { id: created.id, opened: created.opened } : null
+    return created ? { id: created.id, opened: created.opened, pinned: created.pinned } : null
 }
 
 /** openTriggerForm *********************************************************************************************************************************
@@ -357,6 +368,8 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
     timing.lap("lists")
     const backlinkSettings = settings.backlink
     const openDefault = settings.openAfterCreate
+    // The Note Tabs row (issue 7): drawn, and starting there, when the setting is Pin or Don't pin; "" when it is Not used - no row, no pin.
+    const noteTabsDefault: string = FormModel.noteTabsChoices().indexOf(settings.noteTabs) >= 0 ? settings.noteTabs : ""
     // What the form makes of the lists: the notebooks by path, the tag titles, the notebook it starts on and the back link (which names the note's
     // notebook). Made again from fresh lists when the notebook picked turns out to be gone (below).
     const fromLists = async (lists: FormLists) => {
@@ -389,6 +402,7 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
         inThisNote: row.value,
         backlink: shown.backlink ? (shown.backlink.on ? FormModel.BACKLINK_ADD : FormModel.BACKLINK_NONE) : "",
         open: open,
+        noteTabs: noteTabsDefault,
     }
     let pickerOpen = false
     timing.lap("form")
@@ -399,12 +413,12 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
         for (;;){
             const result = await showDialog(handle, buildFormHtml({
                 notebooks: shown.notebooks, tags: shown.tagTitles, values, dayStart, mobile, mobileWidth, pickerOpen, inThisNoteChoices,
-                inThisNoteLabels: row.labels, inThisNoteTitles: row.titles, inThisNoteDefault: row.fallback, backlinkText: shown.backlinkLine,
+                inThisNoteLabels: row.labels, inThisNoteTitles: row.titles, inThisNoteDefault: row.fallback, backlinkText: shown.backlinkLine, noteTabsDefault,
                 timing: SHOW_OPEN_TIMINGS ? { start: timing.start, parts: timing.parts, htmlAt: Date.now(), screen: screenWidthSeen() } : null,
             }))
             const plan = FormModel.planCreate(result, {
                 defaultType: resolvedType, dayStart, notebookId: shown.notebookId, inThisNoteChoices, inThisNoteDefault: row.fallback, mobile,
-                openDefault: open, backlink: shown.backlink,
+                openDefault: open, noteTabsDefault, backlink: shown.backlink,
             })
             if (plan.kind === "none" || plan.kind === "nothing") return null
             if (plan.kind === "invalidDue"){
@@ -718,11 +732,13 @@ async function selectedFolder(): Promise<any> {
 }
 
 /** createNote **************************************************************************************************************************************
- * Executes a 'create' plan: POST notes with the payload formModel built, then the In this note choice, then the tags, and last the open when the  *
- * plan asks for one. The selection route makes its edit first (the link to the new note under its final title), while the editor surely holds the *
- * note the form was opened from: the tags can make Joplin select another note (the selection guard gives it back, but an edit made in between would *
- * land in the wrong note), and opening switches the editor for good. The trigger route makes no edit here: its edit is the content script's,         *
- * made from the answer, so its tags (laterTags) and, on Create and open, the open wait for the content script too (writeTriggerTags, openLater).     *
+ * Executes a 'create' plan: POST notes with the payload formModel built, then the In this note choice, then the tags, then the pin in Note Tabs    *
+ * when the Note Tabs row says Pin, and last the open when the plan asks for one. The selection route makes its edit first (the link to the new     *
+ * note under its final title), while the editor surely holds the note the form was opened from: the tags can make Joplin select another note (the  *
+ * selection guard gives it back, but an edit made in between would land in the wrong note), and opening switches the editor for good. The pin      *
+ * moves nothing (pinInNoteTabs) and comes before the open, so the note opened is already a pinned tab. The trigger route makes no edit here: its   *
+ * edit is the content script's, made from the answer, so its tags (laterTags) and, on Create and open, the open wait for the content script too    *
+ * (writeTriggerTags, openLater); its pin is made here all the same.                                                                                *
  ***************************************************************************************************************************************************/
 async function createNote(plan: any, row: InThisNote): Promise<Created> {
     const note = await joplin.data.post(["notes"], null, plan.note)
@@ -734,8 +750,43 @@ async function createNote(plan: any, row: InThisNote): Promise<Created> {
     const openLater = !!openTarget && row.trigger !== null
     const laterTags: string[] = row.trigger !== null ? plan.tags : []
     if (plan.tags.length && row.trigger === null) await writeTags(note.id, plan.tags, !openTarget)
+    const pinned = plan.pin ? await pinInNoteTabs(note.id) : false
     if (openTarget && !openLater) await openCreatedNote(note.id, openTarget)
-    return { id: note.id, opened: !!openTarget, openTarget, inThisNote: plan.inThisNote || null, link, openLater, laterTags }
+    return { id: note.id, opened: !!openTarget, openTarget, pinned, inThisNote: plan.inThisNote || null, link, openLater, laterTags }
+}
+
+/** pinInNoteTabs ***********************************************************************************************************************************
+ * The Note Tabs row's Pin (issue 7): the Note Tabs plugin's tabsPinNote with the new note's id in an ARRAY - Note Tabs walks its argument as a     *
+ * list, so a bare id would be read one character at a time - once the note exists, since Note Tabs reads it first and refuses one it cannot find.  *
+ * Note Tabs adds the note as a pinned tab (or pins its tab) and redraws its panel: nothing is opened and the selection does not move, so no guard  *
+ * is needed, and a note opened after it keeps its pinned tab. Resolves whether the note was pinned. NEVER THROWS: the note is created whatever     *
+ * Note Tabs answers. Joplin refuses a command no plugin declares ("Command not found") or whose plugin is not running ("without a runtime"): Note  *
+ * Tabs is not installed, or is off. That is said once a run of the plugin (noteTabsMissingShown), with a console warning every time; its absence   *
+ * is never kept, as a phone may load Note Tabs later without a restart, and a miss costs one call. Any other refusal is a console warning and no   *
+ * message.                                                                                                                                         *
+ ***************************************************************************************************************************************************/
+// Whether NOTE_TABS_MISSING_MESSAGE has been shown in this run of the plugin.
+var noteTabsMissingShown = false
+
+async function pinInNoteTabs(noteId: string): Promise<boolean> {
+    try {
+        await joplin.commands.execute("tabsPinNote", [noteId])
+        return true
+    } catch (error) {
+        if (!/Command not found|without a runtime/.test(String((error && (error as any).message) || error))){
+            console.warn("Jot: Note Tabs could not pin the note", error)
+            return false
+        }
+        console.warn("Jot: Note Tabs is not installed or is off, so the new note is not pinned", error)
+        if (noteTabsMissingShown) return false
+        noteTabsMissingShown = true
+        try {
+            await joplin.views.dialogs.showMessageBox(FormModel.NOTE_TABS_MISSING_MESSAGE)
+        } catch (boxError) {
+            console.warn("Jot: could not say that Note Tabs is missing", boxError)
+        }
+        return false
+    }
 }
 
 /** writeTags ***************************************************************************************************************************************

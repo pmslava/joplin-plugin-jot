@@ -1,9 +1,14 @@
 /** README ******************************************************************************************************************************************
- * Jot's settings, under Settings > Plugins > Jot: what every part of the form starts with - the type, the notebook, the tags of the note you are  *
- * in, the back link, whether the new note opens, the In this note choice for highlighted text and for the typed trigger - and the typed trigger, the *
- * day start time and the toolbar button. Every selector in the form has its default here and remembers nothing between opens (issue 5: the In this  *
- * note choice used to be remembered from the last create instead). The notebook, tags and back link settings answer issues 3, 1 and 2, and depend *
- * on how Jot was opened (issue 6): a quick note (nothing highlighted) or a note from text in a note (highlighted text, the typed trigger).          *
+ * Jot's settings, under Settings > Plugins > Jot: what every part of the form starts with - the type, the notebook, the tags of the note you are   *
+ * in, the back link, whether the new note opens, whether it is pinned in Note Tabs, the In this note choice for highlighted text and for the typed *
+ * trigger - and the typed trigger, the day start time and the toolbar button. Every selector in the form has its default here and remembers        *
+ * nothing between opens (issue 5: the In this note choice used to be remembered from the last create instead). The notebook, tags and back link    *
+ * settings answer issues 3, 1 and 2, and depend on how Jot was opened (issue 6): a quick note (nothing highlighted) or a note from text in a note  *
+ * (highlighted text, the typed trigger).                                                                                                           *
+ *                                                                                                                                                  *
+ * THE NOTE TABS SETTING (issue 7) also decides whether the form has its row at all: Not used, the default, draws no Note Tabs row, and Jot never   *
+ * calls the Note Tabs plugin; Pin and Don't pin draw the row, starting there. No plugin can ask which other plugins are installed, so it is this   *
+ * setting that says Note Tabs is there. Plugin settings stay on the device, so a phone shows the row only when it is set on that phone.            *
  *                                                                                                                                                  *
  * WHEN A CHANGED TRIGGER APPLIES. The Markdown editor's content script asks for the trigger when it loads, whenever the editor is given another note *
  * (or its text is replaced from outside, as a sync does) and after every fire (src/contentScript.ts). Settings is a screen of its own on both       *
@@ -43,6 +48,8 @@ export const OLD_BACKLINK_KEY = "backlink"
 export const BACKLINK_TEMPLATE_KEY = "backlinkTemplate"
 export const BACKLINK_POSITION_KEY = "backlinkPosition"
 export const OPEN_AFTER_CREATE_KEY = "openAfterCreate"
+// Whether the new note is pinned in the Note Tabs plugin (issue 7), and whether the form offers it at all.
+export const NOTE_TABS_KEY = "noteTabs"
 export const DAY_START_TIME_KEY = "dayStartTime"
 export const SHOW_TOOLBAR_BUTTON_KEY = "showToolbarButton"
 export const SELECTION_ACTION_KEY = "selectionAction"
@@ -57,6 +64,11 @@ export const TYPE_NOTE = "note"
 export const OPEN_NO = "no"
 export const OPEN_IN_EDITOR = "editor"
 export const OPEN_IN_WINDOW = "window"
+// The Note Tabs setting's values: no row and no call to Note Tabs (the default), or the row starting on Pin or on Don't pin (formModel's
+// NOTE_TABS_OFF, NOTE_TABS_PIN, NOTE_TABS_NONE).
+export const NOTE_TABS_OFF = "off"
+export const NOTE_TABS_PIN = "pin"
+export const NOTE_TABS_NONE = "none"
 // The back link's position (formModel's BACKLINK_TOP, BACKLINK_BOTTOM) and its default text (formModel's DEFAULT_BACKLINK_TEMPLATE).
 export const BACKLINK_TOP = "top"
 export const BACKLINK_BOTTOM = "bottom"
@@ -208,6 +220,20 @@ async function registerJotSettings(): Promise<void> {
                 [OPEN_NO]: "No, stay where you are",
                 [OPEN_IN_EDITOR]: "In the editor",
                 [OPEN_IN_WINDOW]: "In a new window",
+            },
+            public: true,
+            section: SECTION,
+        },
+        [NOTE_TABS_KEY]: {
+            label: "Pin the new note in Note Tabs",
+            description: "Needs the Note Tabs plugin. Pin, or Don't pin: the form gets a Note Tabs row that starts there, and you can switch it in the form. Not used: no row, and Note Tabs is never called.",
+            value: NOTE_TABS_OFF,
+            type: SettingItemType.String,
+            isEnum: true,
+            options: {
+                [NOTE_TABS_OFF]: "Not used",
+                [NOTE_TABS_PIN]: "Pin",
+                [NOTE_TABS_NONE]: "Don't pin",
             },
             public: true,
             section: SECTION,
@@ -366,7 +392,7 @@ export async function getBacklinkSettings(): Promise<{ for: string, template: st
  ***************************************************************************************************************************************************/
 const FORM_SETTING_KEYS = [
     DEFAULT_TYPE_KEY, DAY_START_TIME_KEY, DEFAULT_NOTEBOOK_KEY, TEXT_NOTEBOOK_KEY, TAGS_FROM_KEY, BACKLINK_FOR_KEY, BACKLINK_TEMPLATE_KEY,
-    BACKLINK_POSITION_KEY, OPEN_AFTER_CREATE_KEY, SELECTION_ACTION_KEY, TRIGGER_ACTION_KEY,
+    BACKLINK_POSITION_KEY, OPEN_AFTER_CREATE_KEY, NOTE_TABS_KEY, SELECTION_ACTION_KEY, TRIGGER_ACTION_KEY,
 ]
 
 export interface FormSettings {
@@ -377,6 +403,8 @@ export interface FormSettings {
     tagsFrom: string
     backlink: { for: string, template: string, position: string }
     openAfterCreate: string
+    // "off" (no row), "pin" or "none".
+    noteTabs: string
     selectionAction: string
     triggerAction: string
 }
@@ -463,6 +491,7 @@ export async function watchSettings(): Promise<void> {
 
 function normalizeFormSettings(raw: Record<string, unknown>): FormSettings {
     const open = raw[OPEN_AFTER_CREATE_KEY]
+    const noteTabs = raw[NOTE_TABS_KEY]
     return {
         defaultType: raw[DEFAULT_TYPE_KEY] === TYPE_NOTE ? TYPE_NOTE : TYPE_TODO,
         dayStartTime: String(raw[DAY_START_TIME_KEY] || ""),
@@ -475,6 +504,7 @@ function normalizeFormSettings(raw: Record<string, unknown>): FormSettings {
             position: raw[BACKLINK_POSITION_KEY] === BACKLINK_BOTTOM ? BACKLINK_BOTTOM : BACKLINK_TOP,
         },
         openAfterCreate: open === OPEN_IN_EDITOR || open === OPEN_IN_WINDOW ? open : OPEN_NO,
+        noteTabs: noteTabs === NOTE_TABS_PIN || noteTabs === NOTE_TABS_NONE ? noteTabs : NOTE_TABS_OFF,
         selectionAction: String(raw[SELECTION_ACTION_KEY] || SELECTION_REPLACE),
         triggerAction: String(raw[TRIGGER_ACTION_KEY] || TRIGGER_LINK),
     }

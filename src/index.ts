@@ -13,9 +13,9 @@
  * content script that src/trigger.ts registers; the form opens on its own route and the content script applies the answer to the editor.          *
  *                                                                                                                                                  *
  * PHASE 4: edit mode and the command contract (brief 4.5 and section 6). jot.open takes one argument: { mode: 'edit', noteId } opens edit mode and *
- * resolves { id, changed }; { mode: 'new', type?, title?, body?, notebookId? } opens create mode with those presets and resolves { id, opened };   *
- * no argument, or an unknown mode, is the shortcut's behaviour above. jot.edit, "Edit with Jot…", is edit mode from the note list's right-click    *
- * menu on desktop, which passes the selected notes' ids: the first is edited.                                                                      *
+ * resolves { id, changed }; { mode: 'new', type?, title?, body?, notebookId? } opens create mode with those presets and resolves                   *
+ * { id, opened, pinned }; no argument, or an unknown mode, is the shortcut's behaviour above. jot.edit, "Edit with Jot…", is edit mode from the    *
+ * note list's right-click menu on desktop, which passes the selected notes' ids: the first is edited.                                              *
  *                                                                                                                                                  *
  * THE SANDBOX PROXY RULE: every joplin.* member is read and called in ONE expression (`await joplin.commands.register({...})`, never a member kept  *
  * in a variable and called later), because the proxy path corrupts otherwise. test/run.js audits every source file for it.                        *
@@ -85,8 +85,8 @@ async function followSyncs(){
  * selection…", the editor's right-click menu), jot.button ("Jot", the toolbar button's text and tooltip) and jot.edit ("Edit with Jot…", the note  *
  * list's right-click menu). jot.fromSelection and jot.button open the form through openJot, which takes the selection route when text is           *
  * highlighted; jot.open does the same with no argument and reads the contract's argument otherwise (runOpenCommand); jot.edit opens edit mode on   *
- * the first note id it is given. Each resolves with what the form resolves ({ id, opened }, { id, changed }, or null), the shapes brief section 6  *
- * promises jot.open's callers.                                                                                                                     *
+ * the first note id it is given. Each resolves with what the form resolves ({ id, opened, pinned }, { id, changed }, or null), the shapes brief    *
+ * section 6 promises jot.open's callers.                                                                                                           *
  ***************************************************************************************************************************************************/
 async function setupCommands(){
     // All four at once: each is declared the moment Joplin receives it, in the order sent.

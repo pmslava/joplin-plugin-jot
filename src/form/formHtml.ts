@@ -15,21 +15,22 @@
  * notebook id, day start time) - travels in a <script type="application/json"> element, with every "<" written as < so no value can close it.  *
  * setHtml writes the markup through innerHTML, so the element is never executed, only read.                                                         *
  *                                                                                                                                                  *
- * THE SELECTORS are one-line segmented controls, one builder for all (segmentRow): Type (Note, To-do); In this note on the selection and trigger    *
- * routes (Replace with link, Keep text and, in the Markdown editor, Add link after; or Replace ++ with link and Remove ++ - short labels, the full    *
- * wording as each button's tooltip, the default first); Back link (Add, Don't add) when there is a note to link back to, the line it would add as    *
- * the Add button's tooltip; and Open (No, In editor, New window; no window on mobile). Each is a radiogroup of buttons over a hidden input named     *
- * after its field, so the form sends the choice. The island carries the In this note list and the starting choice with the route's default ({       *
- * choices, value, fallback }, null on the plain routes), so the markup and the island never disagree. Notebook and Tags stay text fields with their *
- * suggestion lists, and Due stays last, so unfolding its picker pushes nothing down.                                                              *
+ * THE SELECTORS are one-line segmented controls, one builder for all (segmentRow): Type (Note, To-do); In this note on the selection and trigger   *
+ * routes (Replace with link, Keep text and, in the Markdown editor, Add link after; or Replace ++ with link and Remove ++ - short labels, the full *
+ * wording as each button's tooltip, the default first); Back link (Add, Don't add) when there is a note to link back to, the line it would add as  *
+ * the Add button's tooltip; Open (No, In editor, New window; no window on mobile); and Note Tabs (Pin, Don't pin) when its setting is Pin or Don't *
+ * pin, starting there (issue 7; Not used draws no row). Each is a radiogroup of buttons over a hidden input named after its field, so the form     *
+ * sends the choice. The island carries the In this note list and the starting choice with the route's default ({ choices, value, fallback }, null  *
+ * on the plain routes), so the markup and the island never disagree. Notebook and Tags stay text fields with their suggestion lists, and Due stays *
+ * last, so unfolding its picker pushes nothing down.                                                                                               *
  *                                                                                                                                                  *
  * TITLE AND TAGS are textareas of one row (.jot-grow) only so they can wrap: formWebview.js grows them to three lines and then lets them scroll       *
  * (issue 4), keeps Enter from ever making a new line in them, and turns a pasted line break into a space. Their content starts with a newline, as  *
  * the Text's does, because the HTML parser drops one there.                                                                                         *
  *                                                                                                                                                  *
  * EDIT MODE (view.mode "edit", brief 4.5) is the same form for an existing note: the heading says Edit to-do or Edit note, and there is no Text    *
- * and no In this note row, so Type, Title, Notebook, Tags and Due remain. The island carries the mode, so the script's heading follows the Type    *
- * toggle in the edit wording.                                                                                                                      *
+ * and no In this note, Back link, Open or Note Tabs row, so Type, Title, Notebook, Tags and Due remain. The island carries the mode, so the        *
+ * script's heading follows the Type toggle in the edit wording.                                                                                    *
  *                                                                                                                                                  *
  * The picker section is Cockpit's set alarm dialog (src/ui/alarm/alarm.ts, openAlarmDialog), single to-do only: the YYYY-MM-DD and HH:MM inputs,   *
  * the two rows of quick buttons, the calendar and the two time columns, with the same ids and the same inline handlers, which formWebview.js        *
@@ -53,6 +54,8 @@ export interface FormValues {
     backlink?: string
     // The Open choice ("no", "editor" or "window"); "" in edit mode.
     open?: string
+    // The Note Tabs choice ("pin" or "none"); "" when the row is not shown (the setting is Not used, or edit mode).
+    noteTabs?: string
 }
 
 export interface FormView {
@@ -74,6 +77,10 @@ export interface FormView {
     inThisNoteDefault?: string
     // The line the Back link row would add (formModel.backlinkText), shown as the Add button's tooltip; empty or absent: no row (no note to link to).
     backlinkText?: string
+    // The Note Tabs row's default, the noteTabs setting when it is Pin or Don't pin ("pin" or "none", formModel.NOTE_TABS_PIN and NOTE_TABS_NONE):
+    // what values.noteTabs starts on and what a value the buttons do not offer reads as. Empty or absent: no row (the setting is Not used). Never
+    // drawn in edit mode, like Open.
+    noteTabsDefault?: string
     // On mobile, the form's width in CSS pixels (core/platform.ts, formWidthOnMobile: from the screen, which the plugin's own webview reports as the
     // dialog's does); absent or null: the form fills the dialog, which Joplin opens at 97% of the window and then sizes to it - the same width.
     mobileWidth?: number | null
@@ -144,8 +151,9 @@ export function islandJson(data: unknown): string {
 }
 
 /** segmentRow **************************************************************************************************************************************
- * One selector: a label, a radiogroup of buttons (one tab stop, the selected one; formWebview.js moves the choice with the arrow keys), and the     *
- * hidden input the form sends. `id` is the hidden input's id; the row is `${id}Row` and the label `${id}Label`.                                     *
+ * One selector: a label, a radiogroup of buttons (one tab stop, the selected one; formWebview.js moves the choice with the arrow keys), and the    *
+ * hidden input the form sends. `id` is the hidden input's id; the row is `${id}Row` and the label `${id}Label`. Every selector is one: Type, In    *
+ * this note, Back link, Open and Note Tabs.                                                                                                        *
  ***************************************************************************************************************************************************/
 function segmentRow(id: string, field: string, label: string, options: SegmentOption[], selected: string, groupClass = ""): string {
     const buttons = options.map(option => {
@@ -183,6 +191,8 @@ export function buildFormHtml(view: FormView): string {
     const backlinkLine = !editing ? String(view.backlinkText || "") : ""
     const backlink = backlinkLine ? (values.backlink === FormModel.BACKLINK_ADD ? FormModel.BACKLINK_ADD : FormModel.BACKLINK_NONE) : ""
     const open = editing ? "" : FormModel.openChoice(values.open, view.mobile)
+    const noteTabsDefault: string = !editing && FormModel.noteTabsChoices().indexOf(view.noteTabsDefault) >= 0 ? String(view.noteTabsDefault) : ""
+    const noteTabs: string = noteTabsDefault ? FormModel.noteTabsChoice(values.noteTabs, noteTabsDefault) : ""
     const island = islandJson({
         mode: mode,
         notebooks: view.notebooks.map(item => ({ id: item.id, path: item.path })),
@@ -214,6 +224,9 @@ export function buildFormHtml(view: FormView): string {
     const openRow = editing ? "" : segmentRow("jotOpen", "open", "Open", FormModel.openChoices(view.mobile).map((value: string) => ({
         value, label: FormModel.OPEN_LABELS[value], title: FormModel.OPEN_TITLES[value],
     })), open)
+    const noteTabsRow = !noteTabs ? "" : segmentRow("jotNoteTabs", "noteTabs", "Note Tabs", FormModel.noteTabsChoices().map((value: string) => ({
+        value, label: FormModel.NOTE_TABS_LABELS[value], title: FormModel.NOTE_TABS_TITLES[value],
+    })), noteTabs)
     const textInput = 'autocomplete="off" autocorrect="off" autocapitalize="off"'
     // The textarea's content starts with a newline because the HTML parser drops one there: a Text that itself starts with an empty line keeps it.
     const textRow = editing ? "" : `
@@ -248,7 +261,7 @@ export function buildFormHtml(view: FormView): string {
                 <label class="jot-label" for="jotTags">Tags</label>
                 <textarea name="tags" id="jotTags" class="jot-input jot-grow" rows="1" ${textInput} spellcheck="false" placeholder="Comma separated"
                     role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="jotTagList">\n${escapeHtml(values.tags)}</textarea>
-            </div>${inThisNoteRow}${backlinkRow}${openRow}
+            </div>${inThisNoteRow}${backlinkRow}${openRow}${noteTabsRow}
             <div class="jot-row jot-due-row" id="jotDueRow">
                 <span class="jot-label">Due</span>
                 <span id="jotDueText" class="jot-due-text">${escapeHtml(FormModel.dueText(values.dueDate, values.dueTime))}</span>
