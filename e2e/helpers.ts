@@ -1,4 +1,5 @@
 import { Page, expect } from '@playwright/test';
+import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -228,6 +229,27 @@ export async function executePluginCommand(win: Page, name: string, ...args: unk
   const result = await callPluginCommand(win, name, ...args);
   await win.waitForTimeout(SETTLE);
   return result;
+}
+
+/** ----------------------------------------------------------------------------------------------
+ * Real key presses
+ * ------------------------------------------------------------------------------------------- */
+
+/**
+ * Presses keys as the X server's own input (xdotool, through XTEST), where `win.keyboard` sends them
+ * through the DevTools protocol: a key sent that way reaches the page, but is not known to reach
+ * Electron's menu shortcuts, and a spec about Joplin's own shortcuts must send what a keyboard sends.
+ * Under Xvfb there is no window manager to give Joplin's window the keyboard, so the first of its
+ * windows is given it (windowfocus; the pointer is not moved, so nothing hovered changes), and a lone
+ * Shift goes first: the first key after the focus was seen to be lost. Each combo is in xdotool's
+ * spelling (`alt+Down`). Needs xdotool on the PATH (the CI job installs it beside Xvfb).
+ */
+export function pressRealKeys(...combos: string[]): void {
+  const run = (command: string) => execSync(command, { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+  const windows = run('xdotool search --onlyvisible --class joplin || true').trim().split('\n').filter(Boolean);
+  if (!windows.length) throw new Error('xdotool found no Joplin window');
+  run(`xdotool windowfocus --sync ${windows[0]} key --clearmodifiers shift`);
+  for (const combo of combos) run(`xdotool key --clearmodifiers ${combo}`);
 }
 
 /** ----------------------------------------------------------------------------------------------

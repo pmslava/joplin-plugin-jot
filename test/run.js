@@ -495,8 +495,9 @@ function makeContentContext(config = { trigger: '++' }) {
     return { context, posts, answerTrigger, waiting }
 }
 
-// Mounts the content script on a stand-in view holding `doc`, the caret at its end; waits for the first config answer.
-async function mountTrigger(doc = '', config) {
+// Mounts the content script on a stand-in view holding `doc`, the caret at its end; waits for the first config answer. `editorExtensions` are the
+// editor's own besides the script's (the Markdown language, for the syntax tree).
+async function mountTrigger(doc = '', config, editorExtensions = []) {
     const { context, posts, answerTrigger, waiting } = makeContentContext(config)
     const extensions = []
     const view = {
@@ -524,7 +525,7 @@ async function mountTrigger(doc = '', config) {
     } finally {
         console.warn = realWarn
     }
-    view.state = CMEditorState.create({ doc, extensions, selection: { anchor: doc.length } })
+    view.state = CMEditorState.create({ doc, extensions: [editorExtensions, extensions], selection: { anchor: doc.length } })
     await tick()
     const type = (text, userEvent = 'input.type') => {
         for (const character of text) {
@@ -644,7 +645,7 @@ async function main() {
         }
     })
 
-    await check('build: dist/contentScript.js requires @codemirror/view and @codemirror/state from Joplin and bundles no CodeMirror of its own', () => {
+    await check('build: dist/contentScript.js requires @codemirror/view, @codemirror/state and @codemirror/language from Joplin and bundles no CodeMirror of its own', () => {
         const full = path.join(DIST, 'contentScript.js')
         assert.ok(fs.existsSync(full), 'dist/contentScript.js exists')
         const source = fs.readFileSync(full, 'utf8')
@@ -653,7 +654,8 @@ async function main() {
         const mentions = source.match(/@codemirror\/[a-z-]+/g) || []
         const required = source.match(/require\(\s*["']@codemirror\/[a-z-]+["']\s*\)/g) || []
         assert.strictEqual(mentions.length, required.length, 'every @codemirror/ mention is a require() call, not a bundled copy')
-        assert.deepStrictEqual([...new Set(required.map(call => call.match(/@codemirror\/[a-z-]+/)[0]))].sort(), ['@codemirror/state', '@codemirror/view'])
+        assert.deepStrictEqual([...new Set(required.map(call => call.match(/@codemirror\/[a-z-]+/)[0]))].sort(), ['@codemirror/language', '@codemirror/state', '@codemirror/view'],
+            'the syntax tree (a trigger in code) is Joplin\'s @codemirror/language too')
         assert.ok(!/class\s+EditorView\b|\bViewPlugin\.fromClass\b.*\bEditorState\.create\b/s.test(source), 'no CodeMirror view code in the bundle')
         assert.ok(source.length < 20000, `the content script is small: the trigger and its rule only (${source.length} bytes)`)
         for (const name of ['triggerAt', 'occurrenceHolds', 'contextRange', '__jotActivatedEditors']) {
@@ -740,17 +742,22 @@ async function main() {
     })
 
     // ---------------------------------------------------------------- settings and the toolbar gate
-    await check('settings: section Jot with exactly defaultType, defaultNotebook, textNotebook, tagsFrom, backlinkFor, backlinkTemplate, backlinkPosition, openAfterCreate, noteTabs, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton on screen, and 0.2.0\'s copyTags and backlink hidden', () => {
+    await check('settings: section Jot with exactly defaultType, defaultNotebook, textNotebook, tagsFrom, backlinkFor, backlinkTemplate, backlinkPosition, openAfterCreate, noteTabs, selectionTitle, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton on screen, and 0.2.0\'s copyTags and backlink hidden', () => {
         assert.deepStrictEqual(desktop.sections.map(section => [section.name, section.spec.label]), [['jot', 'Jot']])
         const specs = desktop.settingSpecs
         assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'defaultNotebook', 'textNotebook', 'tagsFrom', 'backlinkFor', 'backlinkTemplate', 'backlinkPosition',
-            'openAfterCreate', 'noteTabs', 'selectionAction', 'trigger', 'triggerAction', 'dayStartTime', 'showToolbarButton', 'copyTags', 'backlink', 'listCache'],
+            'openAfterCreate', 'noteTabs', 'selectionTitle', 'selectionAction', 'trigger', 'triggerAction', 'dayStartTime', 'showToolbarButton', 'copyTags', 'backlink', 'listCache'],
             'every selector has its default on screen (issue 5); the 0.2.0 switches hidden, kept for the carry-over (issue 6); the stored lists hidden')
         const hidden = ['copyTags', 'backlink', 'listCache']
         for (const key of Object.keys(specs)) {
             assert.strictEqual(specs[key].section, 'jot', `${key} is in the Jot section`)
             assert.strictEqual(specs[key].public, !hidden.includes(key), `${key} is ${hidden.includes(key) ? 'hidden' : 'public'}`)
         }
+        assert.deepStrictEqual({ label: specs.selectionTitle.label, description: specs.selectionTitle.description, value: specs.selectionTitle.value, isEnum: specs.selectionTitle.isEnum, options: specs.selectionTitle.options }, {
+            label: 'Highlighted text in the form',
+            description: 'How the form is filled when Jot is opened from highlighted text. In the form, the arrow at the right of the Title moves the title down into the Text, and the arrow of the Text moves its first line up into an empty Title; Alt+Down and Alt+Up do the same from anywhere in the form. A Title left empty takes the first line of the Text on Create.',
+            value: 'firstLine', isEnum: true, options: { firstLine: 'The first line as the title, the rest as the text', allText: 'All of it as the text, the title empty' },
+        }, 'issue 8: the first line as the title by default, as before')
         assert.deepStrictEqual({ label: specs.selectionAction.label, description: specs.selectionAction.description, value: specs.selectionAction.value, isEnum: specs.selectionAction.isEnum, options: specs.selectionAction.options }, {
             label: 'In this note, for highlighted text',
             description: 'Where the form\'s In this note starts when Jot is opened from highlighted text. You can switch it in the form. Add a link after it is offered in the Markdown editor only; in the Rich Text editor the form starts on Replace instead.',
@@ -1278,6 +1285,29 @@ async function main() {
         assert.ok(unread.state.warnings.some(line => line.startsWith('Jot: could not read the tags')), unread.state.warnings.join(' | '))
     })
 
+    await check('selection route, issue 8: the selectionTitle setting - firstLine (the default) fills the Title as before; allText leaves it empty and puts the whole selection in the Text; a typed title keeps the whole text, an empty one still takes the first line on Create', async () => {
+        const split = await openSelectionWith('Dear Ann,\nthe draft\nBest')
+        assert.strictEqual(fieldValue(split.state.dialogHtml[0], 'title'), 'Dear Ann,', 'the default: the first line the Title')
+        assert.ok(split.state.dialogHtml[0].includes('>\nthe draft\nBest</textarea>'))
+        const all = await openSelectionWith('\nDear Ann,\nthe draft\nBest', { settings: { selectionTitle: 'allText' } })
+        const html = all.state.dialogHtml[0]
+        assert.strictEqual(fieldValue(html, 'title'), '', 'the Title empty')
+        assert.ok(html.includes('>\nDear Ann,\nthe draft\nBest</textarea>'), 'all of it the Text, from its first non-empty line')
+        assert.ok(/<form name="jot" id="jotForm" class="jot-form -can-up"/.test(html), 'the Text\'s arrow applies, the Title\'s does not')
+        assert.ok(islandOf(html).data.inThisNote, 'still the selection route, with In this note')
+        const typed = await openSelectionWith('Dear Ann,\nthe draft', {
+            settings: { selectionTitle: 'allText' }, dialogResults: [formResult('ok', { title: 'Email to Ann', body: 'Dear Ann,\nthe draft', inThisNote: 'replace' })],
+        })
+        assert.deepStrictEqual([notePosts(typed.state)[0].body.title, notePosts(typed.state)[0].body.body], ['Email to Ann', 'Dear Ann,\nthe draft'], 'the whole text in the note')
+        assert.deepStrictEqual(typed.state.executes[1], { name: 'insertText', args: [`[Email to Ann](:/${typed.outcome.id})`] }, 'the link carries the typed title')
+        const untitled = await openSelectionWith('Dear Ann,\nthe draft', {
+            settings: { selectionTitle: 'allText' }, dialogResults: [formResult('ok', { title: '', body: 'Dear Ann,\nthe draft', inThisNote: 'replace' })],
+        })
+        assert.deepStrictEqual([notePosts(untitled.state)[0].body.title, notePosts(untitled.state)[0].body.body], ['Dear Ann,', 'the draft'], 'the empty-title rule, as on any route')
+        const plain = await openSelectionWith('', { settings: { selectionTitle: 'allText' } })
+        assert.ok(!islandOf(plain.state.dialogHtml[0]).data.inThisNote && fieldValue(plain.state.dialogHtml[0], 'title') === '', 'nothing highlighted: the plain form either way')
+    })
+
     await check('a refused Create on the selection route reopens with the In this note choice kept, the Title and Text as typed', async () => {
         const { state, outcome } = await openSelectionWith('Pay rent\nflat', {
             dialogResults: [
@@ -1780,6 +1810,41 @@ async function main() {
         }
     })
 
+    await check('formModel.splitSelection (issue 8): with allText the Title stays empty and the Text is the whole selection from its first non-empty line, as typed; firstLine, unknown or no setting is the split as before', () => {
+        assert.deepStrictEqual(FormModel.splitSelection('\n \nDear Ann,\n  the draft\n\nBest\n', 'allText'), { title: '', body: 'Dear Ann,\n  the draft\n\nBest\n', empty: false },
+            'blank lines first are dropped; the rest, the first line too, is kept as typed')
+        assert.deepStrictEqual(FormModel.splitSelection('One line', 'allText'), { title: '', body: 'One line', empty: false })
+        assert.deepStrictEqual(FormModel.splitSelection('Head\r\nBody', 'allText'), { title: '', body: 'Head\nBody', empty: false })
+        for (const blank of ['', ' \n\t ', null]) assert.deepStrictEqual(FormModel.splitSelection(blank, 'allText'), { title: '', body: '', empty: true })
+        for (const setting of ['firstLine', 'bogus', undefined]) {
+            assert.deepStrictEqual(FormModel.splitSelection('Head\n\nBody', setting), { title: 'Head', body: 'Body', empty: false }, `${setting}: the first line the Title`)
+        }
+        assert.deepStrictEqual([FormModel.TITLE_FIRST_LINE, FormModel.TITLE_ALL_TEXT], ['firstLine', 'allText'])
+    })
+
+    await check('formModel (issue 8): titleMoves says which arrow applies; moveTitleDown makes the title the Text\'s first line; moveTextUp is the empty-title rule by hand; a move that does not apply is null; a round trip gives the form back', () => {
+        assert.deepStrictEqual(FormModel.titleMoves('Buy milk', 'semi'), { down: true, up: false }, 'a title: down only (up would need an empty Title)')
+        assert.deepStrictEqual(FormModel.titleMoves('Buy milk', ''), { down: true, up: false })
+        assert.deepStrictEqual(FormModel.titleMoves('  ', 'Buy milk\nsemi'), { down: false, up: true }, 'a Title of spaces is empty')
+        assert.deepStrictEqual(FormModel.titleMoves('', ' \n '), { down: false, up: false }, 'nothing to move either way')
+        assert.deepStrictEqual(FormModel.titleMoves(undefined, undefined), { down: false, up: false })
+        assert.deepStrictEqual(FormModel.moveTitleDown('  Buy milk ', 'semi\n2 litres'), { title: '', body: 'Buy milk\nsemi\n2 litres' }, 'trimmed, on its own line, the Text after it as typed')
+        assert.deepStrictEqual(FormModel.moveTitleDown('Buy milk', ''), { title: '', body: 'Buy milk' }, 'into an empty Text: the Text is the title')
+        assert.deepStrictEqual(FormModel.moveTitleDown('Buy milk', '\nsemi'), { title: '', body: 'Buy milk\n\nsemi' }, 'a Text starting with an empty line keeps it')
+        assert.deepStrictEqual(FormModel.moveTitleDown('Buy\nmilk', 'x'), { title: '', body: 'Buy milk\nx' }, 'a title holds no line break')
+        assert.strictEqual(FormModel.moveTitleDown(' ', 'semi'), null, 'no title, nothing to move down')
+        assert.deepStrictEqual(FormModel.moveTextUp('', '\n  Buy milk  \n\nsemi\n2 litres'), { title: 'Buy milk', body: 'semi\n2 litres' }, 'the first non-empty line, trimmed; the blank lines around it go')
+        assert.deepStrictEqual(FormModel.moveTextUp(' ', 'Buy milk'), { title: 'Buy milk', body: '' })
+        assert.strictEqual(FormModel.moveTextUp('Title', 'Buy milk'), null, 'a title already there is never replaced')
+        assert.strictEqual(FormModel.moveTextUp('', ' \n '), null, 'nothing in the Text')
+        const down = FormModel.moveTitleDown('Buy milk', 'semi\n2 litres')
+        assert.deepStrictEqual(FormModel.moveTextUp(down.title, down.body), { title: 'Buy milk', body: 'semi\n2 litres' }, 'down then up: the form as it was')
+        const up = FormModel.moveTextUp('', 'Dear Ann,\nthe draft')
+        assert.deepStrictEqual(FormModel.moveTitleDown(up.title, up.body), { title: '', body: 'Dear Ann,\nthe draft' }, 'up then down: the form as it was')
+        const rule = FormModel.applyEmptyTitleRule('', 'Dear Ann,\nthe draft')
+        assert.deepStrictEqual(FormModel.moveTextUp('', 'Dear Ann,\nthe draft'), { title: rule.title, body: rule.body }, 'what Create would make of the empty Title')
+    })
+
     await check('formModel: the In this note choices and labels, the remembered default, the link as Joplin\'s markdownTag, the edit for each choice, and planCreate\'s inThisNote', () => {
         assert.deepStrictEqual(FormModel.SELECTION_LABELS, { keep: 'Keep the text', replace: 'Replace it with a link to the new note', after: 'Add a link after it' })
         assert.deepStrictEqual(FormModel.selectionChoices(true), ['replace', 'keep', 'after'], 'the default drawn first')
@@ -1940,6 +2005,18 @@ async function main() {
         assert.strictEqual(TriggerRule.triggerAt('a ++ b', 0, '++', { from: 0, to: 6 }, []).fires, false, 'only at the insertion\'s end')
         assert.strictEqual(TriggerRule.triggerAt('a ++', 0, '++', { from: 4, to: 4 }, []).fires, false, 'an empty insertion (a deletion) never fires')
         assert.strictEqual(TriggerRule.triggerAt('++', 1, '++', { from: 2, to: 3 }, []).fires, false, 'a slice too short to decide does not fire')
+    })
+
+    await check('triggerRule.inCode: a fenced code block, an indented code block or an inline code span among the syntax nodes is code; anything else, or no names at all, is not', () => {
+        assert.deepStrictEqual(TriggerRule.CODE_NODES, ['FencedCode', 'CodeBlock', 'InlineCode'])
+        assert.strictEqual(TriggerRule.inCode(['CodeText', 'FencedCode', 'Document']), true)
+        assert.strictEqual(TriggerRule.inCode(['CodeText', 'FencedCode', 'ListItem', 'BulletList', 'Document']), true, 'a fenced block in a list')
+        assert.strictEqual(TriggerRule.inCode(['CodeText', 'CodeBlock', 'Document']), true)
+        assert.strictEqual(TriggerRule.inCode(['InlineCode', 'Paragraph', 'Document']), true)
+        assert.strictEqual(TriggerRule.inCode(['CodeMark', 'InlineCode', 'Paragraph', 'Document']), true)
+        for (const names of [['Paragraph', 'Document'], ['Document'], ['Emphasis', 'Paragraph', 'Document'], [], undefined, null, 'FencedCode']) {
+            assert.strictEqual(TriggerRule.inCode(names), false, `${JSON.stringify(names)} is not code`)
+        }
     })
 
     await check('triggerRule: a cancelled occurrence does not fire again until the range changes; normalizeTrigger and contextRange', () => {
@@ -2150,11 +2227,12 @@ async function main() {
         assert.ok(glue.includes("notebook.addEventListener('keydown', onJotSuggestKeyDown)") && glue.includes("tags.addEventListener('keydown', onJotSuggestKeyDown)"),
             'the handler sits on the inputs themselves (the target phase)')
         assert.ok(!/document\.addEventListener\(\s*'keydown'/.test(glue), 'no document-level keydown listener')
-        assert.deepStrictEqual(glue.match(/window\.addEventListener\(\s*'keydown'[^)]*\)/g), ["window.addEventListener('keydown', onJotWindowKeyDown)"],
-            'one window-level keydown listener, in the bubble phase (no capture flag), and it leaves inputs alone, so a list still takes its Enter first')
+        assert.deepStrictEqual(glue.match(/window\.addEventListener\(\s*'keydown'[^)]*\)/g),
+            ["window.addEventListener('keydown', onJotWindowKeyDown)", "window.addEventListener('keydown', onJotMoveKeyDown, true)"],
+            'one window-level keydown listener for Enter, in the bubble phase (no capture flag), and it leaves inputs alone, so a list still takes its Enter first; and the arrows\' (issue 8), in the capture phase')
         const windowRule = glue.slice(glue.indexOf('function onJotWindowKeyDown'), glue.indexOf('function focusJotTitle'))
         assert.ok(windowRule.indexOf("if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return") < windowRule.indexOf('event.preventDefault()'))
-        assert.ok(!/addEventListener\([^)]*,\s*true\s*\)/.test(glue), 'no capture-phase listener')
+        assert.deepStrictEqual(glue.match(/addEventListener\([^)]*,\s*true\s*\)/g), ["addEventListener('keydown', onJotMoveKeyDown, true)"], 'the one capture-phase listener is the arrows\'')
         // Escape: only the list handler takes it, and only while its list is open (it closes the list alone); with none open it returns before
         // stopping anything, so the host hears the press and cancels the form - a second Escape closes the form.
         const bare = (source) => source.replace(/\/\*\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
@@ -2166,6 +2244,10 @@ async function main() {
         assert.ok(escapeBranch.includes('event.preventDefault()') && escapeBranch.includes('event.stopPropagation()') && escapeBranch.includes('closeJotSuggest()'),
             'with a list open Escape closes the list and the host never sees it')
         assert.strictEqual((bare(glue).match(/Escape/g) || []).length, 1, 'Escape is looked at in the list handler only')
+        const moveRule = bare(glue.slice(glue.indexOf('function onJotMoveKeyDown'), glue.indexOf('/** The picker: quick buttons')))
+        const otherKeys = moveRule.indexOf("if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return")
+        assert.ok(otherKeys >= 0 && otherKeys < moveRule.indexOf('event.preventDefault()') && otherKeys < moveRule.indexOf('event.stopPropagation()'),
+            'the arrows\' capture listener returns on every other key before stopping anything: Enter and Escape still reach a list first')
         assert.ok(glue.includes('new MutationObserver(initJotFormIfNeeded)'), 'every new form is wired by the observer (setHtml does not re-run scripts)')
         for (const line of glue.split('\n')) {
             assert.ok(!/^var\b.*\b(window\.FormModel|window\.AlarmQuick|AlarmQuick\.|window\.SearchTokens)/.test(line), `no load-time binding: ${line}`)
@@ -2303,6 +2385,119 @@ async function main() {
             'each form reads its island before its first heading is set')
     })
 
+    await check('markup (issue 8): in create mode the Title and the Text each carry their arrow, out of the tab order, the shortcut in its tooltip and aria-keyshortcuts; the form starts -can-down / -can-up from its values; edit mode has neither; form.css keeps them out of the flow, over the text and opaque, shown on hover (always on mobile)', async () => {
+        const plain = (await openFormWith({})).state.dialogHtml[0]
+        assert.ok(/<form name="jot" id="jotForm" class="jot-form" autocomplete="off">/.test(plain), 'an empty form: no arrow applies')
+        assert.ok(/<div class="jot-field">\s*<textarea name="title" id="jotTitle"[^>]*>\n<\/textarea>\s*<button type="button" id="jotTitleDown" class="jot-move -down" tabindex="-1" title="Move the title down into the text \(Alt\+↓\)" aria-label="Move the title down into the text" aria-keyshortcuts="Alt\+ArrowDown"><svg[^>]*>/.test(plain),
+            'the Title\'s arrow, after the Title in its .jot-field')
+        assert.ok(/<div class="jot-field">\s*<textarea name="body" id="jotBody"[^>]*>\n<\/textarea>\s*<button type="button" id="jotBodyUp" class="jot-move -up" tabindex="-1" title="Move the first line up into the title \(Alt\+↑\)" aria-label="Move the first line up into the title" aria-keyshortcuts="Alt\+ArrowUp"><svg[^>]*>/.test(plain),
+            'the Text\'s arrow, after the Text in its .jot-field')
+        const selection = (await openSelectionWith('Buy milk\nsemi')).state.dialogHtml[0]
+        assert.ok(/class="jot-form -can-down"/.test(selection), 'a title: the Title\'s arrow applies')
+        const note = (await openSelectionWith('Buy milk', { settings: { defaultType: 'note' } })).state.dialogHtml[0]
+        assert.ok(/class="jot-form -note -can-down"/.test(note))
+        const mobile = (await openSelectionWith('Buy milk', { versionInfo: MOBILE, settings: { selectionTitle: 'allText' } })).state.dialogHtml[0]
+        assert.ok(/class="jot-form -mobile -can-up"/.test(mobile))
+        const edit = (await editWith({ dialogResults: [editResult('cancel')] })).state.dialogHtml[0]
+        assert.ok(!/jot-field|jot-move|-can-down|-can-up/.test(edit), 'edit mode: no Text, no arrows')
+        const css = read('src/form/form.css').replace(/\/\*[\s\S]*?\*\//g, '')
+        assert.ok(!/@media/.test(css), 'no @media rule: mobile is the form\'s -mobile class')
+        assert.ok(/\.jot-move\s*\{[^}]*position:\s*absolute;[^}]*opacity:\s*0;[^}]*visibility:\s*hidden;/.test(css), 'out of the flow, hidden and unclickable until shown')
+        assert.ok(!/\.jot-field \.jot-input\s*\{[^}]*padding/.test(css) && !/\.jot-field[^{]*\{[^}]*padding/.test(css), 'no room kept for the arrow: the field keeps its whole width for the text')
+        assert.ok(/\.jot-move\s*\{[^}]*background-color:\s*var\(--joplin-background-color, #ffffff\);/.test(css) && /\.jot-move svg\s*\{[^}]*opacity:\s*0\.6;/.test(css),
+            'over the text the arrow is opaque, on the dialog\'s background; its glyph is what is dimmed')
+        assert.ok(/\.jot-form\.-can-down \.jot-field:hover > \.jot-move\.-down,\s*\.jot-form\.-can-up \.jot-field:hover > \.jot-move\.-up,\s*\.jot-form\.-mobile\.-can-down \.jot-move\.-down,\s*\.jot-form\.-mobile\.-can-up \.jot-move\.-up\s*\{[^}]*visibility:\s*visible;/.test(css),
+            'shown on hover when its move applies; on mobile whenever it applies')
+    })
+
+    await check('dialog glue (issue 8): the arrows move a line between the Title and the Text; Alt+Down / Alt+Up act from anywhere, taken first and swallowed even when nothing moves, any other key left alone; the classes follow; a caret in the Text keeps its place; no Text, no key taken (run in a stand-in DOM)', () => {
+        const vm = require('vm')
+        const field = (id, value) => ({
+            id, value, style: {}, scrollTop: 40, scrollHeight: 100, selectionStart: 0, selectionEnd: 0,
+            setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end },
+        })
+        const make = ({ title, body, focus }) => {
+            const classes = new Set()
+            const nodes = { jotTitle: field('jotTitle', title) }
+            if (body !== undefined) nodes.jotBody = field('jotBody', body)
+            const form = {
+                classList: { toggle: (name, on) => { if (on) classes.add(name); else classes.delete(name) }, add: (name) => classes.add(name), contains: (name) => classes.has(name) },
+                getAttribute: (name) => (name === 'data-jot-ready' ? '1' : null),
+            }
+            let wired = false
+            const listeners = []
+            const sandbox = {
+                document: { readyState: 'complete', documentElement: {}, activeElement: null, getElementById: (id) => nodes[id] || null, querySelector: () => (wired ? form : null) },
+                MutationObserver: class { observe() {} },
+                setTimeout: () => 0,
+            }
+            sandbox.window = sandbox
+            sandbox.addEventListener = (type, handler, capture) => listeners.push({ type, handler, capture: capture === true })
+            vm.createContext(sandbox)
+            vm.runInContext(read('src/form/formModel.js'), sandbox)
+            vm.runInContext(read('src/form/formWebview.js'), sandbox)
+            wired = true
+            sandbox.document.activeElement = focus ? nodes[focus] : null
+            const capturing = listeners.filter(listener => listener.type === 'keydown' && listener.capture)
+            assert.strictEqual(capturing.length, 1, 'one capture-phase keydown listener')
+            const press = (key, modifiers = {}) => {
+                const event = {
+                    key, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, isComposing: false, ...modifiers, prevented: false, stopped: false,
+                    preventDefault() { this.prevented = true }, stopPropagation() { this.stopped = true },
+                }
+                capturing[0].handler(event)
+                return event
+            }
+            // The Title, the Text and the form's arrow classes, as they stand.
+            const values = () => [nodes.jotTitle.value, nodes.jotBody ? nodes.jotBody.value : undefined, [...classes].sort()]
+            sandbox.updateJotMoves()
+            return { sandbox, nodes, press, form: values }
+        }
+
+        const one = make({ title: 'Buy milk', body: 'semi\n2 litres', focus: 'jotTitle' })
+        assert.deepStrictEqual(one.form(), ['Buy milk', 'semi\n2 litres', ['-can-down']])
+        const down = one.press('ArrowDown', { altKey: true })
+        assert.deepStrictEqual([down.prevented, down.stopped], [true, true], 'taken before any field sees it')
+        assert.deepStrictEqual(one.form(), ['', 'Buy milk\nsemi\n2 litres', ['-can-up']], 'the title is the Text\'s first line; now the Text\'s arrow applies')
+        assert.deepStrictEqual([one.nodes.jotTitle.selectionStart, one.nodes.jotBody.scrollTop], [0, 0], 'the Title keeps the focus, empty; the Text shows its top')
+        const again = one.press('ArrowDown', { altKey: true })
+        assert.deepStrictEqual([again.prevented, again.stopped, one.form()[0]], [true, true, ''], 'nothing to move: still swallowed')
+        one.press('ArrowUp', { altKey: true })
+        assert.deepStrictEqual(one.form(), ['Buy milk', 'semi\n2 litres', ['-can-down']], 'up: the form as it was')
+        assert.strictEqual(one.nodes.jotTitle.selectionStart, 8, 'the caret at the end of the focused Title')
+        for (const [key, modifiers] of [['ArrowDown', {}], ['ArrowUp', {}], ['ArrowDown', { altKey: true, ctrlKey: true }], ['ArrowDown', { altKey: true, shiftKey: true }],
+            ['ArrowDown', { altKey: true, metaKey: true }], ['ArrowLeft', { altKey: true }], ['Enter', { altKey: true }], ['Escape', {}], ['ArrowDown', { altKey: true, isComposing: true }]]) {
+            const event = one.press(key, modifiers)
+            assert.deepStrictEqual([event.prevented, event.stopped], [false, false], `${JSON.stringify(modifiers)} ${key} is left to the form`)
+        }
+        assert.deepStrictEqual(one.form(), ['Buy milk', 'semi\n2 litres', ['-can-down']])
+
+        const caret = make({ title: 'Head', body: 'abc', focus: 'jotBody' })
+        caret.nodes.jotBody.setSelectionRange(1, 2)
+        caret.press('ArrowDown', { altKey: true })
+        assert.deepStrictEqual([caret.form()[1], caret.nodes.jotBody.selectionStart, caret.nodes.jotBody.selectionEnd, caret.nodes.jotBody.scrollTop], ['Head\nabc', 6, 7, 40],
+            'the caret in the Text moves with its text, and the Text keeps its scroll')
+        caret.press('ArrowUp', { altKey: true })
+        assert.deepStrictEqual([caret.form()[0], caret.form()[1], caret.nodes.jotBody.selectionStart, caret.nodes.jotBody.selectionEnd], ['Head', 'abc', 1, 2])
+        const blanks = make({ title: '', body: '\n\nFirst\n\nrest', focus: 'jotBody' })
+        blanks.nodes.jotBody.setSelectionRange(3, 3)
+        blanks.press('ArrowUp', { altKey: true })
+        assert.deepStrictEqual([blanks.form()[0], blanks.form()[1], blanks.nodes.jotBody.selectionStart], ['First', 'rest', 0], 'a caret inside what left the Text goes to its start')
+
+        const clicked = make({ title: 'Buy milk', body: '', focus: null })
+        const press = { prevented: false, preventDefault() { this.prevented = true } }
+        clicked.sandbox.onJotMoveMouseDown(press)
+        assert.strictEqual(press.prevented, true, 'a press on an arrow never takes the focus')
+        clicked.sandbox.onJotMoveClick({ currentTarget: { id: 'jotTitleDown' } })
+        assert.deepStrictEqual(clicked.form(), ['', 'Buy milk', ['-can-up']])
+        clicked.sandbox.onJotMoveClick({ currentTarget: { id: 'jotBodyUp' } })
+        assert.deepStrictEqual(clicked.form(), ['Buy milk', '', ['-can-down']])
+
+        const edit = make({ title: 'Call the bank', body: undefined, focus: 'jotTitle' })
+        const left = edit.press('ArrowDown', { altKey: true })
+        assert.deepStrictEqual([left.prevented, left.stopped, edit.form()[0], edit.form()[2]], [false, false, 'Call the bank', []], 'no Text (edit mode): no arrows, no key taken')
+    })
+
     // ---------------------------------------------------------------- the content script, in Node
     await check('content script: plugin() adds one update listener (and the compositionend handler) and asks for the trigger; a second mount on the same view is a no-op; CodeMirror 5 gets nothing', async () => {
         const editor = await mountTrigger('')
@@ -2403,6 +2598,45 @@ async function main() {
             fresh.type('+')
             assert.deepStrictEqual(fresh.triggers(), [], `${userEvent || 'no user event'}, then a third +: still nothing`)
         }
+    })
+
+    await check('content script: no fire in code - a fenced block (closed, still open to the end, or ~~~), an indented block, an inline code span - read from the editor\'s Markdown tree; the same ++ outside code fires; no tree, it fires as before', async () => {
+        const { markdown } = require('@codemirror/lang-markdown')
+        const at = (editor, position) => editor.view.dispatch({ selection: { anchor: position } })
+        const open = await mountTrigger('```js\nlet i = 0\n', undefined, [markdown()])
+        open.type('i ++')
+        assert.deepStrictEqual(open.triggers(), [], 'a fence not closed yet runs to the end of the note: code')
+        const closed = await mountTrigger('```\nline\n```\nafter', undefined, [markdown()])
+        at(closed, 8)
+        closed.type(' ++')
+        assert.strictEqual(closed.text(), '```\nline ++\n```\nafter')
+        assert.deepStrictEqual(closed.triggers(), [], 'inside a closed fence: code')
+        at(closed, closed.text().length)
+        closed.type(' ++')
+        assert.deepStrictEqual(closed.triggers(), [{ type: 'trigger', from: 22, to: 24, trigger: '++' }], 'after the fence: prose, it fires')
+        const tilde = await mountTrigger('~~~\n', undefined, [markdown()])
+        tilde.type('a ++')
+        assert.deepStrictEqual(tilde.triggers(), [], 'a ~~~ fence too')
+        const indented = await mountTrigger('Para\n\n    code', undefined, [markdown()])
+        indented.type(' ++')
+        assert.deepStrictEqual(indented.triggers(), [], 'an indented code block')
+        const listed = await mountTrigger('Para\n\n- item ', undefined, [markdown()])
+        listed.type('++')
+        assert.deepStrictEqual(listed.triggers().length, 1, 'a list item is prose: it fires')
+        const inline = await mountTrigger('Use `a ` here', undefined, [markdown()])
+        at(inline, 7)
+        inline.type('++')
+        assert.strictEqual(inline.text(), 'Use `a ++` here')
+        assert.deepStrictEqual(inline.triggers(), [], 'an inline code span')
+        at(inline, inline.text().length)
+        inline.type(' ++')
+        assert.deepStrictEqual(inline.triggers(), [{ type: 'trigger', from: 16, to: 18, trigger: '++' }], 'after the span: it fires')
+        const unclosedSpan = await mountTrigger('Use `a ', undefined, [markdown()])
+        unclosedSpan.type('++')
+        assert.strictEqual(unclosedSpan.triggers().length, 1, 'a backtick not closed is no code span (as the editor shows it): it fires')
+        const noTree = await mountTrigger('```\n')
+        noTree.type('a ++')
+        assert.strictEqual(noTree.triggers().length, 1, 'an editor without a Markdown tree fires as before')
     })
 
     await check('content script: while the view is composing nothing fires; once the composition is over the composed ++ fires once', async () => {
@@ -2636,7 +2870,7 @@ async function main() {
         await withWarnings(state, () => state.commands.find(item => item.name === 'jot.open').execute())
         assert.strictEqual(atOpen, afterStartup, 'no list read between the tap and the form')
         const formKeys = ['defaultType', 'dayStartTime', 'defaultNotebook', 'textNotebook', 'tagsFrom', 'backlinkFor', 'backlinkTemplate',
-            'backlinkPosition', 'openAfterCreate', 'noteTabs', 'selectionAction', 'triggerAction']
+            'backlinkPosition', 'openAfterCreate', 'noteTabs', 'selectionTitle', 'selectionAction', 'triggerAction']
         assert.deepStrictEqual(state.settingBatches, [[...formKeys, 'showToolbarButton', 'copyTags', 'backlink', 'listCache']],
             'every setting the start and the form need, in one call at startup, which the form opens on')
         assert.deepStrictEqual(state.settingReads, [], 'and no single reads')

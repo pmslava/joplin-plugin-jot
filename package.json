@@ -33,6 +33,8 @@
     "todo"
   ],
   "devDependencies": {
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.13.1",
     "@codemirror/state": "^6.4.0",
     "@codemirror/view": "^6.26.0",
     "@joplin/lib": "~2.9",

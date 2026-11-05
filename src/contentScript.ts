@@ -10,6 +10,12 @@
  * at work, view.composing) the ranges wait, mapped through every change, and are put to the rule once the composition is over: at the next update, *
  * or shortly after the compositionend event when no update follows it. One fire at a time; the first range that fires wins.                         *
  *                                                                                                                                                  *
+ * IN CODE. A trigger the rule accepts does not fire inside code - a fenced code block, an indented code block, an inline code span - and is not     *
+ * remembered either, so the same "++" fires once the code around it is gone. Where it stands is read from the Markdown syntax tree the editor keeps  *
+ * (Joplin's own @codemirror/language: syntaxTree, ensureSyntaxTree so the tree reaches the trigger), at the trigger's first character, without      *
+ * entering the language of a fenced block (resolve, not resolveInner); triggerRule.inCode decides from the names. The module is required guarded:  *
+ * an editor that does not have it, or a tree that does not reach the trigger, fires as before.                                                     *
+ *                                                                                                                                                  *
  * THE ROUND TRIP. A fire posts { type: 'trigger', from, to, trigger } and awaits the answer, which the plugin gives when the form closes (the desktop *
  * IPC holds the reply as long as that takes). Meanwhile from and to are mapped through every change. The answer is applied as ONE transaction:       *
  * remove deletes the trigger, link replaces it with the Markdown link, so one Undo restores what was typed; the history is closed after it (a        *
@@ -37,8 +43,16 @@
 
 /** Imports *****************************************************************************************************************************************/
 import { EditorView, ViewUpdate } from '@codemirror/view'
-import { ChangeDesc, EditorSelection, Text, Transaction } from '@codemirror/state'
+import { ChangeDesc, EditorSelection, EditorState, Text, Transaction } from '@codemirror/state'
 const TriggerRule = require('./form/triggerRule')
+
+// Joplin's @codemirror/language, for the syntax tree (IN CODE in the README); null when the editor cannot give it.
+let CodeMirrorLanguage: typeof import('@codemirror/language') | null = null
+try {
+    CodeMirrorLanguage = require('@codemirror/language')
+} catch (error) {
+    CodeMirrorLanguage = null
+}
 
 /** Types *******************************************************************************************************************************************/
 // Joplin's ContentScriptContext, typed here as Harper types it (the api/ types would pull runtime enums into the editor's bundle).
@@ -74,6 +88,8 @@ const COMPOSITION_SETTLE_MS = 120
 // The user event of this script's own edit: not 'input.type' (so it never fires the trigger) and not joinable with typing in CodeMirror's history.
 const EDIT_USER_EVENT = 'input.jot'
 const MAX_CANCELLED = 64
+// How long the syntax tree may take to reach a trigger past where the editor has parsed (ensureSyntaxTree): a typed trigger is in view, so normally none.
+const TREE_TIMEOUT_MS = 50
 const NOTE_ID = /^[0-9a-f]{32}$/
 
 /** alreadyActivated ********************************************************************************************************************************
@@ -140,6 +156,24 @@ function occurrenceHolds(doc: Text, occurrence: Occurrence): boolean {
     if (occurrence.from < 0 || occurrence.to > doc.length) return false
     const around = TriggerRule.contextRange(occurrence.to, occurrence.text.length)
     return TriggerRule.occurrenceHolds(doc.sliceString(around.from, around.to), around.from, occurrence)
+}
+
+/** syntaxAt **************************************************************************************************************************************
+ * The names of the syntax nodes at position `pos` of `state`, innermost first, in the Markdown tree as far as the editor has parsed it (made to reach *
+ * `pos` within TREE_TIMEOUT_MS when it does not). A fenced block's own language is not entered: its CodeText and FencedCode are what say code. No     *
+ * module, no tree, or a tree that does not reach `pos`: no names.                                                                                  *
+ ***************************************************************************************************************************************************/
+function syntaxAt(state: EditorState, pos: number): string[] {
+    if (!CodeMirrorLanguage) return []
+    try {
+        const tree = CodeMirrorLanguage.ensureSyntaxTree(state, pos + 1, TREE_TIMEOUT_MS) || CodeMirrorLanguage.syntaxTree(state)
+        if (!tree || tree.length < pos) return []
+        const names: string[] = []
+        for (let node: { name: string, parent: unknown } | null = tree.resolve(pos, 1); node; node = node.parent as typeof node) names.push(node.name)
+        return names
+    } catch (error) {
+        return []
+    }
 }
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
@@ -235,7 +269,7 @@ class TriggerWatcher {
         }
         const ranges = this.deferred.concat(typed)
         this.deferred = []
-        this.evaluate(update.view, update.state.doc, ranges)
+        this.evaluate(update.view, update.state, ranges)
     }
 
     /** compositionEnded: the ranges typed during a composition are checked shortly after it ends, in case no update comes to check them. */
@@ -244,16 +278,18 @@ class TriggerWatcher {
             if (view.composing || !this.deferred.length) return
             const ranges = this.deferred
             this.deferred = []
-            this.evaluate(view, view.state.doc, ranges)
+            this.evaluate(view, view.state, ranges)
         }, COMPOSITION_SETTLE_MS)
     }
 
-    /** evaluate: the first typed range that fires the rule fires; nothing fires while the trigger is off or a fire waits for its answer. */
-    private evaluate(view: EditorView, doc: Text, ranges: Range[]): void {
+    /** evaluate: the first typed range that fires the rule, outside code, fires; nothing fires while the trigger is off or a fire waits for its answer. */
+    private evaluate(view: EditorView, state: EditorState, ranges: Range[]): void {
         if (!ranges.length || !this.trigger || this.pending) return
+        const doc = state.doc
         for (const range of ranges) {
             const around = TriggerRule.contextRange(range.to, this.trigger.length)
             const verdict = TriggerRule.triggerAt(doc.sliceString(around.from, around.to), around.from, this.trigger, range, this.cancelled)
+            if (verdict.fires && TriggerRule.inCode(syntaxAt(state, verdict.from))) continue
             if (verdict.fires) {
                 const pending: Pending = { view, from: verdict.from, to: verdict.to, text: this.trigger, lost: false }
                 this.pending = pending

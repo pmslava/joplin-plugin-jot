@@ -232,16 +232,18 @@ export async function runOpenCommand(args?: unknown): Promise<FormOutcome | Edit
 
 /** openJot *****************************************************************************************************************************************
  * What jot.open, jot.fromSelection and jot.button run (brief 4.4: one chord serves both). The selection is read first: highlighted text opens the    *
- * form on the selection route, its first non-empty line as the Title and the rest as the Text; no selection (none, whitespace only, unreadable)     *
- * opens the plain form on `route`. A form already open is left alone without reading anything.                                                    *
+ * form on the selection route, its first non-empty line as the Title and the rest as the Text, or all of it as the Text when the selectionTitle    *
+ * setting says so (issue 8); no selection (none, whitespace only, unreadable) opens the plain form on `route`. A form already open is left alone    *
+ * without reading anything.                                                                                                                        *
  ***************************************************************************************************************************************************/
 export async function openJot(route: string): Promise<FormOutcome | null> {
     if (formIsOpen) return null
     const timing = stopwatch()
-    // Both at once: on a busy phone each call waits its turn, so two in a row cost two waits. The note is usually known already (noteAtTap).
-    const [selection, editorNote] = await Promise.all([readSelectedText(), noteAtTap(timing)])
+    // All at once: on a busy phone each call waits its turn, so two in a row cost two waits. The note is usually known already (noteAtTap), and the
+    // settings are kept in memory (getFormSettings), so neither is usually a call at all.
+    const [selection, editorNote, settings] = await Promise.all([readSelectedText(), noteAtTap(timing), getFormSettings()])
     timing.lap("selection")
-    const split = FormModel.splitSelection(selection)
+    const split = FormModel.splitSelection(selection, settings.selectionTitle)
     if (split.empty) return openForm(route, { timing, editorNote })
     return openForm(SELECTION_ROUTE, { title: split.title, body: split.body, selection, timing, editorNote })
 }

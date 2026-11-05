@@ -224,6 +224,40 @@ test.describe('The typed trigger (desktop, Markdown editor)', () => {
     await expect.poll(async () => editorDoc(win), { timeout: 10_000 }).toBe('C++ and i++ ++');
   });
 
+  test('in code ++ opens nothing - in a fenced code block, in an inline code span - and after them it still does', async () => {
+    const { win } = joplin;
+    const body = '```\nlet i = 0\n```\nUse `a ` here\n';
+    const note = await api.post('/notes', { parent_id: bookId, title: `Source code ${stamp}`, body });
+    await callPluginCommand(win, 'openNote', note.id);
+    await expect.poll(async () => selectedNoteId(win).catch(() => ''), { timeout: 20_000 }).toBe(note.id);
+    await expect.poll(async () => editorDoc(win), { timeout: 20_000 }).toBe(body);
+    await focusEditorAtEnd(win);
+    // The caret where the test says, through the editor's own view (editorDoc's handle).
+    const caretAt = (position: number) => win.evaluate((at) => {
+      const view = (document.querySelector('.cm-editor .cm-content') as any).cmView.rootView.view;
+      view.dispatch({ selection: { anchor: at } });
+      view.focus();
+    }, position);
+
+    await caretAt(13);
+    await win.keyboard.type(' ++');
+    await expect.poll(async () => editorDoc(win), { timeout: 10_000 }).toBe('```\nlet i = 0 ++\n```\nUse `a ` here\n');
+    await expectNoForm(win);
+
+    await caretAt(28);
+    await win.keyboard.type('++');
+    await expect.poll(async () => editorDoc(win), { timeout: 10_000 }).toBe('```\nlet i = 0 ++\n```\nUse `a ++` here\n');
+    await expectNoForm(win);
+
+    // After the code, on a line of its own: the trigger.
+    await win.keyboard.press('Control+End');
+    await win.keyboard.type('++');
+    await formFrame(win);
+    await dialogButton(win, 'Cancel').click();
+    await expect.poll(async () => formIsOpen(win), { timeout: 20_000 }).toBe(false);
+    await expect.poll(async () => editorDoc(win), { timeout: 10_000 }).toBe('```\nlet i = 0 ++\n```\nUse `a ++` here\n++');
+  });
+
   test('the trigger arriving by paste or by the insertText command opens nothing', async () => {
     const { win } = joplin;
     await openEmptyNote(win, `Source paste ${stamp}`);

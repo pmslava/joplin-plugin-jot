@@ -15,11 +15,11 @@ In Joplin, Settings › Plugins › search for Jot and install it. Or download `
 ## Ways in
 
 - **Tools › Jot…**, with `Ctrl+Shift+J` as its shortcut on every platform (change it under Options › Keyboard Shortcuts).
-- **Jot from the selection…** in the editor's right-click menu. The first line of the highlighted text becomes the title and the rest the text. The shortcut does the same when text is highlighted.
+- **Jot from the selection…** in the editor's right-click menu. The first line of the highlighted text becomes the title and the rest the text, or all of it the text, by setting. The shortcut does the same when text is highlighted.
 
   <img src="docs/images/form-selection.png" width="833" alt="Two highlighted lines in the Markdown editor and the form opened from them, title and text prefilled, with the In this note row">
 
-- **Typing `++`** at the start of a line or after a space in the Markdown editor. The trigger is a setting; empty turns it off. It never fires inside a word (`C++`), on a paste, or twice for the same occurrence: cancel the form once and that `++` is left alone.
+- **Typing `++`** at the start of a line or after a space in the Markdown editor. The trigger is a setting; empty turns it off. It never fires inside a word (`C++`), inside code (a fenced or indented code block, or an inline code span), on a paste, or twice for the same occurrence: cancel the form once and that `++` is left alone.
 
   <img src="docs/images/form-trigger.png" width="833" alt="A line ending in ++ in the editor and the form it opened, offering to replace the ++ with a link or remove it">
 
@@ -46,6 +46,8 @@ Jot tells two kinds of note apart. A **quick note** is one you start with nothin
 
 Each of these is a setting, so a quick note can be just the shortcut, a title and Enter, and a note from text can come out ready, with no clicks. Notebook and Tags filter a list as you type, and Enter picks the highlighted row.
 
+**Title** and **Text** trade a line with the arrows at their right edge. Point at the Title and a down arrow appears: it moves the title to the top of the Text, as its first line, and leaves the Title empty for one you type. Point at the Text while the Title is empty and an up arrow appears: it makes the Text's first line the title. `Alt+↓` and `Alt+↑` do the same from anywhere in the form, and the cursor stays where it is. So from highlighted text, `Alt+↓`, a title of your own and Enter keep the whole text in the note. On a phone, with no pointer to hover, each arrow shows whenever it applies.
+
 **Title** and **Tags** grow with what they hold, up to three lines; past that they scroll, and the scrollbar shows there is more. Tab into either puts the cursor at the end, ready to add to it; a click puts it where you click. Enter in them never starts a new line, and a pasted line break becomes a space.
 
 **Due** shows the date and time beside a bell. The bell unfolds Cockpit's date picker, the calendar, the time columns and the quick buttons, and every pick writes into the row at once. A to-do whose date is picked before its time starts at the day start time.
@@ -67,6 +69,7 @@ Settings › Plugins › Jot:
 - **Back link position**: the first line, above the text (default), or the last line, below it.
 - **Open the new note**: No, In the editor, or In a new window; the form's Open starts here.
 - **Pin the new note in Note Tabs**: Not used (default), Pin, or Don't pin; the form's Note Tabs row starts here, and Not used shows no row.
+- **Highlighted text in the form**: The first line as the title, the rest as the text (default), or All of it as the text, the title empty. A title left empty still takes the first line of the text on Create.
 - **In this note, for highlighted text**: Replace it with a link to the new note (default), Keep the text, or Add a link after it.
 - **In this note, for the typed trigger**: Replace the trigger with a link to the new note (default), or Remove the trigger.
 - **Typed trigger**, **Day start time**, and **Show the Jot button in the note toolbar** (after a restart, since Joplin cannot add or remove a toolbar button while running).
@@ -74,7 +77,7 @@ Settings › Plugins › Jot:
 ## Known limits
 
 - In the Rich Text editor the typed trigger does not work (no plugin code runs there), and "Add a link after it" is not offered; the shortcut and the right-click entry work, and "Replace it with a link" writes the link as HTML.
-- The trigger ignores Markdown context: `++` after a space fires inside a code block too. Cancel once and that occurrence is left alone.
+- In the form, `Alt+↑` and `Alt+↓` (`Option` on macOS) belong to the arrows between Title and Text, so on macOS they no longer move the cursor by paragraph in the Text.
 - When the note list shows **All notes**, Joplin answers a new tag by selecting the note at the top of the list, which is the note Jot has just created. Jot notices and opens the note you were reading again, at the same scroll position and caret in the Markdown editor. Joplin can only do that by showing the note's notebook, so the note list switches from All notes to that notebook.
 
 ## Works with Cockpit
@@ -104,4 +107,4 @@ If this plugin is useful to you, support the work: [GitHub Sponsors](https://git
 
 ## Credits
 
-The idea of a note from highlighted text comes from Convert Text To New Note by ambrt. The capture use case comes from xiaofeng's request in the Cockpit forum thread. The date picker is Cockpit's. MIT.
+The idea of a note from highlighted text comes from Convert Text To New Note by ambrt. The capture use case comes from xiaofeng's request in the Cockpit forum thread. Keeping highlighted text whole in the Text comes from bwat47's request (issue 8). The date picker is Cockpit's. MIT.

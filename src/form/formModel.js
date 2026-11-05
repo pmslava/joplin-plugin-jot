@@ -3,14 +3,14 @@
  * the dialog loads it as a script (window.FormModel, for formWebview.js), and the Node harness requires it directly (module.exports), so the three   *
  * run the same decisions and every rule below is pinned by a check rather than by reading the source. UMD in the shape of Cockpit's noteMenu.js.    *
  *                                                                                                                                                  *
- * What is here: the dialog result's dispatch (which button), the form values read back from formData, the empty-title rule, the tag csv, the date  *
- * and time validation (Cockpit's parseAlarmFields), the due timestamp, the day start time, the notebook paths and the notebook default order, the  *
- * create plan the host executes, the selection route's rules (the title/text split, the In this note choices and their default, the link, the edit *
- * the host makes in the note), the trigger route's (its two choices, their labels with the trigger printed, the answer the content script gets),   *
- * edit mode's (the prefill from the note, the Due split back into its fields, the "what changed" diff that Save writes), the reading of jot.open's *
- * arguments (brief section 6), the Open row's choices, the Note Tabs row's (issue 7), the back link (Copy Note ID's placeholders, rendered for the *
- * note the user is in, and put first or last in the body), and the small helpers the dialog's glue asks (the heading, the Due row text, the        *
- * suggestion lists, the tag token).                                                                                                                *
+ * What is here: the dialog result's dispatch (which button), the form values read back from formData, the empty-title rule, the tag csv, the date and  *
+ * time validation (Cockpit's parseAlarmFields), the due timestamp, the day start time, the notebook paths and the notebook default order, the create   *
+ * plan the host executes, the selection route's rules (the title/text split, the In this note choices and their default, the link, the edit the host   *
+ * makes in the note), the arrows that move a line between the Title and the Text (issue 8), the trigger route's (its two choices, their labels with    *
+ * the trigger printed, the answer the content script gets), edit mode's (the prefill from the note, the Due split back into its fields, the "what      *
+ * changed" diff that Save writes), the reading of jot.open's arguments (brief section 6), the Open row's choices, the Note Tabs row's (issue 7), the   *
+ * back link (Copy Note ID's placeholders, rendered for the note the user is in, and put first or last in the body), and the small helpers the dialog's *
+ * glue asks (the heading, the Due row text, the suggestion lists, the tag token).                                                                      *
  *                                                                                                                                                  *
  * CROSS-SCRIPT GLOBALS. In the dialog, window.SearchTokens (searchTokens.js, the filter rule copied from Cockpit) may load before or after this file:*
  * addScript appends plain <script> elements, which run in the order they finish loading. So it is looked up per call (searchTokens below), never     *
@@ -60,6 +60,9 @@
     // (selectionChoices, triggerChoices), so "the default, else the first drawn" lands on the same button.
     var SELECTION_DEFAULT = REPLACE
     var TRIGGER_DEFAULT = LINK
+    // How highlighted text fills the form (issue 8, the selectionTitle setting): its first line the Title and the rest the Text, or all of it the Text.
+    var TITLE_FIRST_LINE = 'firstLine'
+    var TITLE_ALL_TEXT = 'allText'
     // The title Joplin shows for a note whose title is empty, used as the link's text so a link to such a note is never invisible.
     var UNTITLED = 'Untitled'
     // The segments' short labels: every selector is one line, so the In this note choices are shortened there and keep their full wording as the
@@ -624,13 +627,44 @@
 
     /** splitSelection **********************************************************************************************************************************
      * The selection route's prefill (brief 4.4, open question 1): the selection's first non-empty line, trimmed, is the Title, and the lines after it,  *
-     * with the blank lines that lead them dropped, are the Text, as typed. The empty-title rule's split, applied to the selection. A selection that is   *
-     * not a string, is empty or holds only whitespace is `empty`: the host then takes the plain route, as if nothing were highlighted.                  *
+     * with the blank lines that lead them dropped, are the Text, as typed. The empty-title rule's split, applied to the selection. With `titleFrom`     *
+     * TITLE_ALL_TEXT (issue 8) the Title stays empty and the Text is the whole selection from its first non-empty line, as typed: the split the        *
+     * Text's arrow, or Create with the Title still empty, would make. A selection that is not a string, is empty or holds only whitespace is `empty`:   *
+     * the host then takes the plain route, as if nothing were highlighted.                                                                             *
      ***************************************************************************************************************************************************/
-    function splitSelection(selection){
+    function splitSelection(selection, titleFrom){
         if (typeof selection !== 'string') return { title: '', body: '', empty: true }
         var named = applyEmptyTitleRule('', selection)
-        return { title: named.title, body: named.body, empty: named.nothing }
+        if (named.nothing || titleFrom !== TITLE_ALL_TEXT) return { title: named.title, body: named.body, empty: named.nothing }
+        var lines = selection.replace(/\r\n?/g, '\n').split('\n')
+        while (lines.length && !lines[0].trim()) lines.shift()
+        return { title: '', body: lines.join('\n'), empty: false }
+    }
+
+    /** titleMoves / moveTitleDown / moveTextUp ********************************************************************************************************
+     * The two arrows of the form (issue 8), at the right of the Title and of the Text, and Alt+Down and Alt+Up. Down moves the title, trimmed, to the   *
+     * top of the Text as its own first line, and leaves the Title empty. Up is the empty-title rule made by hand: with the Title empty, the Text's first *
+     * non-empty line becomes the title and leaves the Text, with the blank lines around it - what Create would do with the Title still empty. Down      *
+     * needs a title; Up needs an empty Title and a Text with something in it (titleMoves says which apply, for the glue to show the arrows). A move     *
+     * that does not apply is null. Either way the Text only changes at its start: what follows the moved line is kept as typed, so the glue can keep  *
+     * the caret where it was.                                                                                                                          *
+     ***************************************************************************************************************************************************/
+    function titleMoves(title, body){
+        var titled = !!text(title).trim()
+        return { down: titled, up: !titled && !!text(body).trim() }
+    }
+
+    function moveTitleDown(title, body){
+        var line = text(title).replace(/\r\n?|\n/g, ' ').trim()
+        if (!line) return null
+        var rest = text(body).replace(/\r\n?/g, '\n')
+        return { title: '', body: rest ? line + '\n' + rest : line }
+    }
+
+    function moveTextUp(title, body){
+        if (!titleMoves(title, body).up) return null
+        var named = applyEmptyTitleRule('', body)
+        return { title: named.title, body: named.body }
     }
 
     /** selectionChoices / inThisNoteAction **************************************************************************************************************
@@ -909,6 +943,11 @@
         editStart: editStart,
         planEdit: planEdit,
         splitSelection: splitSelection,
+        TITLE_FIRST_LINE: TITLE_FIRST_LINE,
+        TITLE_ALL_TEXT: TITLE_ALL_TEXT,
+        titleMoves: titleMoves,
+        moveTitleDown: moveTitleDown,
+        moveTextUp: moveTextUp,
         selectionChoices: selectionChoices,
         inThisNoteAction: inThisNoteAction,
         selectionAction: inThisNoteAction,

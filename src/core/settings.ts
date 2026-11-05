@@ -1,10 +1,10 @@
 /** README ******************************************************************************************************************************************
  * Jot's settings, under Settings > Plugins > Jot: what every part of the form starts with - the type, the notebook, the tags of the note you are   *
- * in, the back link, whether the new note opens, whether it is pinned in Note Tabs, the In this note choice for highlighted text and for the typed *
- * trigger - and the typed trigger, the day start time and the toolbar button. Every selector in the form has its default here and remembers        *
- * nothing between opens (issue 5: the In this note choice used to be remembered from the last create instead). The notebook, tags and back link    *
- * settings answer issues 3, 1 and 2, and depend on how Jot was opened (issue 6): a quick note (nothing highlighted) or a note from text in a note  *
- * (highlighted text, the typed trigger).                                                                                                           *
+ * in, the back link, whether the new note opens, whether it is pinned in Note Tabs, how highlighted text fills the Title and the Text (issue 8),   *
+ * the In this note choice for highlighted text and for the typed trigger - and the typed trigger, the day start time and the toolbar button. Every *
+ * selector in the form has its default here and remembers nothing between opens (issue 5: the In this note choice used to be remembered from the   *
+ * last create instead). The notebook, tags and back link settings answer issues 3, 1 and 2, and depend on how Jot was opened (issue 6): a quick    *
+ * note (nothing highlighted) or a note from text in a note (highlighted text, the typed trigger).                                                  *
  *                                                                                                                                                  *
  * THE NOTE TABS SETTING (issue 7) also decides whether the form has its row at all: Not used, the default, draws no Note Tabs row, and Jot never   *
  * calls the Note Tabs plugin; Pin and Don't pin draw the row, starting there. No plugin can ask which other plugins are installed, so it is this   *
@@ -52,6 +52,8 @@ export const OPEN_AFTER_CREATE_KEY = "openAfterCreate"
 export const NOTE_TABS_KEY = "noteTabs"
 export const DAY_START_TIME_KEY = "dayStartTime"
 export const SHOW_TOOLBAR_BUTTON_KEY = "showToolbarButton"
+// How highlighted text fills the form (issue 8): its first line the Title and the rest the Text, or all of it the Text.
+export const SELECTION_TITLE_KEY = "selectionTitle"
 export const SELECTION_ACTION_KEY = "selectionAction"
 export const TRIGGER_KEY = "trigger"
 export const TRIGGER_ACTION_KEY = "triggerAction"
@@ -79,6 +81,9 @@ export const CURRENT_NOTEBOOK = ""
 export const FOR_NEVER = "never"
 export const FOR_TEXT = "text"
 export const FOR_ALWAYS = "always"
+// The selectionTitle setting's values (formModel's TITLE_FIRST_LINE, TITLE_ALL_TEXT): the first line as the Title by default.
+export const SELECTION_TITLE_FIRST_LINE = "firstLine"
+export const SELECTION_TITLE_ALL_TEXT = "allText"
 // The In this note choices (formModel's KEEP, REPLACE, AFTER): the selectionAction setting's values, replace by default (formModel.SELECTION_DEFAULT).
 export const SELECTION_REPLACE = "replace"
 export const SELECTION_KEEP = "keep"
@@ -238,6 +243,19 @@ async function registerJotSettings(): Promise<void> {
             public: true,
             section: SECTION,
         },
+        [SELECTION_TITLE_KEY]: {
+            label: "Highlighted text in the form",
+            description: "How the form is filled when Jot is opened from highlighted text. In the form, the arrow at the right of the Title moves the title down into the Text, and the arrow of the Text moves its first line up into an empty Title; Alt+Down and Alt+Up do the same from anywhere in the form. A Title left empty takes the first line of the Text on Create.",
+            value: SELECTION_TITLE_FIRST_LINE,
+            type: SettingItemType.String,
+            isEnum: true,
+            options: {
+                [SELECTION_TITLE_FIRST_LINE]: "The first line as the title, the rest as the text",
+                [SELECTION_TITLE_ALL_TEXT]: "All of it as the text, the title empty",
+            },
+            public: true,
+            section: SECTION,
+        },
         [SELECTION_ACTION_KEY]: {
             label: "In this note, for highlighted text",
             description: "Where the form's In this note starts when Jot is opened from highlighted text. You can switch it in the form. Add a link after it is offered in the Markdown editor only; in the Rich Text editor the form starts on Replace instead.",
@@ -392,7 +410,7 @@ export async function getBacklinkSettings(): Promise<{ for: string, template: st
  ***************************************************************************************************************************************************/
 const FORM_SETTING_KEYS = [
     DEFAULT_TYPE_KEY, DAY_START_TIME_KEY, DEFAULT_NOTEBOOK_KEY, TEXT_NOTEBOOK_KEY, TAGS_FROM_KEY, BACKLINK_FOR_KEY, BACKLINK_TEMPLATE_KEY,
-    BACKLINK_POSITION_KEY, OPEN_AFTER_CREATE_KEY, NOTE_TABS_KEY, SELECTION_ACTION_KEY, TRIGGER_ACTION_KEY,
+    BACKLINK_POSITION_KEY, OPEN_AFTER_CREATE_KEY, NOTE_TABS_KEY, SELECTION_TITLE_KEY, SELECTION_ACTION_KEY, TRIGGER_ACTION_KEY,
 ]
 
 export interface FormSettings {
@@ -405,6 +423,8 @@ export interface FormSettings {
     openAfterCreate: string
     // "off" (no row), "pin" or "none".
     noteTabs: string
+    // "firstLine" (the first line of highlighted text the Title) or "allText" (all of it the Text).
+    selectionTitle: string
     selectionAction: string
     triggerAction: string
 }
@@ -505,6 +525,7 @@ function normalizeFormSettings(raw: Record<string, unknown>): FormSettings {
         },
         openAfterCreate: open === OPEN_IN_EDITOR || open === OPEN_IN_WINDOW ? open : OPEN_NO,
         noteTabs: noteTabs === NOTE_TABS_PIN || noteTabs === NOTE_TABS_NONE ? noteTabs : NOTE_TABS_OFF,
+        selectionTitle: raw[SELECTION_TITLE_KEY] === SELECTION_TITLE_ALL_TEXT ? SELECTION_TITLE_ALL_TEXT : SELECTION_TITLE_FIRST_LINE,
         selectionAction: String(raw[SELECTION_ACTION_KEY] || SELECTION_REPLACE),
         triggerAction: String(raw[TRIGGER_ACTION_KEY] || TRIGGER_LINK),
     }

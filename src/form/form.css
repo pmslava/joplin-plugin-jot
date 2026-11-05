@@ -218,6 +218,71 @@ textarea.jot-grow {
     }
 }
 
+/* Issue 8: the arrows that move a line between the Title and the Text. Each field sits in a .jot-field with its arrow
+ * over its right edge, out of the flow, so showing one changes no size. The field keeps its whole width for the text:
+ * the arrow lies over whatever is under it while it shows, on the dialog's own background with a thin ring, so it reads
+ * clearly over text and nothing shows through it. It sits 7px in, clear of the 5px scrollbar either field gets past
+ * its height, and centred on the first line. An arrow shows only while the pointer is over its field and its move
+ * applies (the form's -can-down and -can-up, which the script keeps in step), fading in with a small slide its own
+ * way; hidden, it cannot be clicked. Mobile has no pointer to hover with, so there each shows whenever its move
+ * applies. */
+.jot-field {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.jot-move {
+    position: absolute;
+    top: calc((var(--jot-control) - 22px) / 2);
+    right: 7px;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    /* The form's font, so --jot-control's em is the form's. */
+    font-family: inherit;
+    font-size: inherit;
+    color: var(--joplin-color, currentColor);
+    background-color: var(--joplin-background-color, #ffffff);
+    border: none;
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px var(--jot-line);
+    cursor: pointer;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0s linear 0.15s;
+}
+/* The glyph is dimmed, not the button, so the button stays opaque over the text. */
+.jot-move svg {
+    opacity: 0.6;
+    transition: opacity 0.12s ease;
+}
+.jot-move.-down {
+    transform: translateY(-3px);
+}
+.jot-move.-up {
+    transform: translateY(3px);
+}
+.jot-form.-can-down .jot-field:hover > .jot-move.-down,
+.jot-form.-can-up .jot-field:hover > .jot-move.-up,
+.jot-form.-mobile.-can-down .jot-move.-down,
+.jot-form.-mobile.-can-up .jot-move.-up {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0s;
+}
+.jot-move:hover {
+    color: var(--jot-accent);
+    background-image: linear-gradient(var(--jot-hover), var(--jot-hover));
+}
+.jot-move:hover svg {
+    opacity: 1;
+}
+
 /* The selectors - Type, In this note, Back link, Open, Note Tabs: one line of segments that act as radios. A group takes the width
  * its labels need; "-fill" (In this note) takes the row's width, its segments sharing it. A label that does not fit
  * ends in an ellipsis and shows whole as the button's tooltip. */

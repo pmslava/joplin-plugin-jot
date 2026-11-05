@@ -1,8 +1,9 @@
 /** README ******************************************************************************************************************************************
  * The DOM glue of Jot's form dialog (brief 4.1, 4.2). The markup is the host's (formHtml.ts, written with dialogs.setHtml on every open); every     *
  * decision is formModel.js's (window.FormModel) and every quick-button date is alarmQuick.js's (window.AlarmQuick, copied from Cockpit). This file   *
- * wires them to the fields and keeps five things in step: the Type toggle and the heading, the suggestion lists of Notebook and Tags, the Due row,  *
- * the picker folded behind the bell (Cockpit's alarmWebview.js, ported, single to-do), and on the selection and trigger routes In this note.      *
+ * wires them to the fields and keeps six things in step: the Type toggle and the heading, the suggestion lists of Notebook and Tags, the Due row,   *
+ * the picker folded behind the bell (Cockpit's alarmWebview.js, ported, single to-do), on the selection and trigger routes In this note, and the   *
+ * arrows that move a line between the Title and the Text (issue 8).                                                                                *
  *                                                                                                                                                  *
  * WHY A MutationObserver. setHtml writes new markup into a document whose scripts have already run, and does not run them again; a reopened dialog   *
  * may also be a fresh document where this file runs after the markup. So the form is wired whenever a form appears that is not wired yet (a marker  *
@@ -16,7 +17,8 @@
  * document-level keydown listener in the bubble phase that ignores defaultPrevented, and cancels it on Escape. Enter inside an open suggestion list  *
  * must pick the row and not create, so the list's input handles keydown on itself (the target phase) and calls stopPropagation and preventDefault;  *
  * the host's listener never sees that press. Escape is taken the same way while a list is open, and closes only the list; with no list open it is   *
- * left to the host, which cancels the form. Enter in the Text is a newline, which the host does not touch.                                         *
+ * left to the host, which cancels the form. Enter in the Text is a newline, which the host does not touch. Alt+Down and Alt+Up are the arrows'    *
+ * (onJotMoveKeyDown), taken on the window in the capture phase, before any field or selector sees them.                                            *
  ***************************************************************************************************************************************************/
 
 // When this script began to run: each open is a fresh webview (mobile 3.7.8, and desktop 3.7.21 mounts a new frame per open too), so this is when
@@ -499,6 +501,74 @@ function onJotSuggestClick(event){
     var row = event.target && event.target.closest ? event.target.closest('.jot-suggest-row') : null
     if (!row || !jotSuggest) return
     pickJotSuggest(Number(row.getAttribute('data-index')))
+}
+
+/** The arrows: a line between the Title and the Text (issue 8) ***********************************************************************************
+ * Down, at the Title's right edge, makes the title the Text's first line; up, at the Text's, makes the Text's first line the empty Title's (the    *
+ * rules are formModel's: titleMoves, moveTitleDown, moveTextUp). The form's -can-down and -can-up say which applies, for form.css to show the arrow *
+ * on hover; the markup starts them, and every keystroke in the Title or the Text and every move keeps them in step. A move changes the values, not  *
+ * the focus: a press on an arrow never takes it (preventDefault, as the Notebook's chevron), and Alt+Down / Alt+Up act from wherever it is. So the   *
+ * Title, focused when the form opens, is still focused and empty after a Down: typing gives the note its own title, the whole text kept. The Text   *
+ * changes only at its start, so a caret in it moves by what was added or taken there; a Text without the focus shows its top again. A Title that   *
+ * changes height moves the fields under it, so an open Notebook or Tags list is placed again.                                                      *
+ *                                                                                                                                                  *
+ * ALT+DOWN AND ALT+UP are taken on the window in the capture phase, before any field sees them: the selectors and the Notebook and Tags lists move  *
+ * on the arrow keys without looking at Alt, and the picker's columns scroll on them. They are swallowed even when nothing moves, so no field acts   *
+ * on them in this form. Joplin's own Alt+Up / Alt+Down (Edit > Swap line up / down, a menu shortcut) did not move a line of the note being read     *
+ * while the form had the focus, with or without the preventDefault (Joplin 3.6.14 on Linux, real keys: e2e/arrows.spec.ts); the preventDefault is  *
+ * there for a platform whose menu hears a key the page left alone (Windows and macOS are not checked). A form without a Text (edit mode) leaves the *
+ * keys alone.                                                                                                                                      *
+ ***************************************************************************************************************************************************/
+function updateJotMoves(){
+    var form = jotForm()
+    var title = jotById('jotTitle')
+    var body = jotById('jotBody')
+    if (!form) return
+    var moves = title && body ? model().titleMoves(title.value, body.value) : { down: false, up: false }
+    form.classList.toggle('-can-down', moves.down)
+    form.classList.toggle('-can-up', moves.up)
+}
+
+// `direction` is 'down' or 'up'. Returns whether a line moved.
+function moveJotLine(direction){
+    var title = jotById('jotTitle')
+    var body = jotById('jotBody')
+    if (!title || !body) return false
+    var moved = direction === 'down' ? model().moveTitleDown(title.value, body.value) : model().moveTextUp(title.value, body.value)
+    if (!moved) return false
+    var focused = document.activeElement
+    var shift = moved.body.length - body.value.length
+    var start = body.selectionStart, end = body.selectionEnd
+    title.value = moved.title
+    body.value = moved.body
+    if (focused === body){
+        try { body.setSelectionRange(Math.max(0, start + shift), Math.max(0, end + shift)) } catch (error){}
+    } else {
+        body.scrollTop = 0
+    }
+    if (focused === title) jotCaretToEnd(title)
+    sizeJotGrow(title)
+    if (jotSuggest) placeJotSuggest(jotSuggest.input, jotSuggest.list)
+    updateJotMoves()
+    return true
+}
+
+function onJotMoveMouseDown(event){
+    event.preventDefault()
+}
+
+function onJotMoveClick(event){
+    moveJotLine(event.currentTarget.id === 'jotTitleDown' ? 'down' : 'up')
+}
+
+function onJotMoveKeyDown(event){
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing) return
+    var form = jotForm()
+    if (!form || form.getAttribute('data-jot-ready') !== '1' || !jotById('jotBody')) return
+    event.preventDefault()
+    event.stopPropagation()
+    moveJotLine(event.key === 'ArrowDown' ? 'down' : 'up')
 }
 
 /** The picker: quick buttons (ported from alarmWebview.js) ****************************************************************************************
@@ -1003,6 +1073,18 @@ function initJotFormIfNeeded(){
         growing[grow].addEventListener('focus', onJotGrowFocus)
     }
 
+    var body = jotById('jotBody')
+    if (body){
+        jotById('jotTitle').addEventListener('input', updateJotMoves)
+        body.addEventListener('input', updateJotMoves)
+        var arrows = [jotById('jotTitleDown'), jotById('jotBodyUp')]
+        for (var arrow = 0; arrow < arrows.length; arrow++){
+            if (!arrows[arrow]) continue
+            arrows[arrow].addEventListener('mousedown', onJotMoveMouseDown)
+            arrows[arrow].addEventListener('click', onJotMoveClick)
+        }
+    }
+
     var tags = jotById('jotTags')
     tags.addEventListener('input', onJotTagsInput)
     tags.addEventListener('keydown', onJotSuggestKeyDown)
@@ -1026,6 +1108,7 @@ function initJotFormIfNeeded(){
 
     setJotType(jotById('jotType').value)
     sizeJotGrowAll()
+    updateJotMoves()
     writeJotDue(due.date, due.time)
     renderAlarmCalendar()
     if (!jotById('jotPicker').hasAttribute('hidden')) setJotPickerOpen(true)
@@ -1038,6 +1121,7 @@ function initJotFormIfNeeded(){
 
 window.addEventListener('focus', onJotWindowFocus)
 window.addEventListener('keydown', onJotWindowKeyDown)
+window.addEventListener('keydown', onJotMoveKeyDown, true)
 window.addEventListener('resize', sizeJotGrowAll)
 window.addEventListener('resize', showJotForm)
 new MutationObserver(initJotFormIfNeeded).observe(document.documentElement, { childList: true, subtree: true })

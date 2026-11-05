@@ -44,11 +44,12 @@ jobs:
       - run: npm ci
 
       # Electron is Chromium under the hood, so Playwright's chromium host deps cover Joplin too.
-      # Also install Xvfb for the virtual display the GUI requires.
-      - name: Install Electron/Chromium system dependencies + Xvfb
+      # Also install Xvfb for the virtual display the GUI requires, and xdotool for the specs that press
+      # real keys (e2e/helpers.ts, pressRealKeys: Alt+Up / Alt+Down against Joplin's own menu shortcuts).
+      - name: Install Electron/Chromium system dependencies + Xvfb + xdotool
         run: |
           sudo npx playwright install-deps chromium
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y xvfb xdotool
 
       # Cache the downloaded Joplin AppImage so reruns skip the ~150 MB download.
       # setup-e2e.sh re-extracts it (fast) when the squashfs-root is absent.

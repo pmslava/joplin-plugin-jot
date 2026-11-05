@@ -28,9 +28,15 @@
  * (issue 4), keeps Enter from ever making a new line in them, and turns a pasted line break into a space. Their content starts with a newline, as  *
  * the Text's does, because the HTML parser drops one there.                                                                                         *
  *                                                                                                                                                  *
+ * THE ARROWS (issue 8). In create mode the Title and the Text each sit in a .jot-field with an arrow at its right edge: down on the Title (the title *
+ * becomes the Text's first line), up on the Text (its first line becomes the empty Title's). They are out of the flow and always in the markup;    *
+ * form.css shows one only while the pointer is over its field and its move applies - the form's -can-down and -can-up classes, set here from the   *
+ * starting values (formModel.titleMoves) and kept in step by formWebview.js - and on mobile, which has no pointer, whenever it applies. Neither is a *
+ * tab stop: Alt+Down and Alt+Up are the keyboard's way (formWebview.js).                                                                           *
+ *                                                                                                                                                  *
  * EDIT MODE (view.mode "edit", brief 4.5) is the same form for an existing note: the heading says Edit to-do or Edit note, and there is no Text    *
- * and no In this note, Back link, Open or Note Tabs row, so Type, Title, Notebook, Tags and Due remain. The island carries the mode, so the        *
- * script's heading follows the Type toggle in the edit wording.                                                                                    *
+ * and no In this note, Back link, Open or Note Tabs row, and no arrows, so Type, Title, Notebook, Tags and Due remain. The island carries the mode,*
+ * so the script's heading follows the Type toggle in the edit wording.                                                                             *
  *                                                                                                                                                  *
  * The picker section is Cockpit's set alarm dialog (src/ui/alarm/alarm.ts, openAlarmDialog), single to-do only: the YYYY-MM-DD and HH:MM inputs,   *
  * the two rows of quick buttons, the calendar and the two time columns, with the same ids and the same inline handlers, which formWebview.js        *
@@ -105,6 +111,14 @@ const BELL_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="current
     + '<path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 '
     + '5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>'
 
+// The arrows that move a line between the Title and the Text (issue 8): Material Design's "arrow_downward" and "arrow_upward" glyphs (Apache 2.0).
+const ARROW_DOWN_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false">'
+    + '<path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/></svg>'
+const ARROW_UP_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false">'
+    + '<path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg>'
+const TITLE_DOWN_LABEL = "Move the title down into the text"
+const TEXT_UP_LABEL = "Move the first line up into the title"
+
 /** FORM_CSS ****************************************************************************************************************************************
  * The form's stylesheet as the markup carries it: form.css without its comments and with its whitespace collapsed (about 8 KB). Made once, when    *
  * the plugin loads.                                                                                                                                *
@@ -170,6 +184,14 @@ function segmentRow(id: string, field: string, label: string, options: SegmentOp
             </div>`
 }
 
+/** moveButton *************************************************************************************************************************************
+ * One arrow (issue 8): out of the tab order (Alt+Down and Alt+Up are the keyboard's way), its shortcut in its tooltip and in aria-keyshortcuts.     *
+ ***************************************************************************************************************************************************/
+function moveButton(id: string, direction: string, label: string, key: string, icon: string): string {
+    return `<button type="button" id="${id}" class="jot-move -${direction}" tabindex="-1" title="${escapeHtml(label)} (Alt+${key === "ArrowDown" ? "↓" : "↑"})"`
+        + ` aria-label="${escapeHtml(label)}" aria-keyshortcuts="Alt+${key}">${icon}</button>`
+}
+
 /** buildFormHtml ***********************************************************************************************************************************
  * The whole dialog markup for one open. `values` are the fields' starting values: the defaults on a fresh open (in edit mode, the note's), or      *
  * what the user had typed when the form is reopened after a refused Create or Save (then `pickerOpen` shows the picker, so the date that was       *
@@ -193,6 +215,8 @@ export function buildFormHtml(view: FormView): string {
     const open = editing ? "" : FormModel.openChoice(values.open, view.mobile)
     const noteTabsDefault: string = !editing && FormModel.noteTabsChoices().indexOf(view.noteTabsDefault) >= 0 ? String(view.noteTabsDefault) : ""
     const noteTabs: string = noteTabsDefault ? FormModel.noteTabsChoice(values.noteTabs, noteTabsDefault) : ""
+    // Which arrow applies to the starting values (issue 8); edit mode has no Text, so neither.
+    const moves = editing ? { down: false, up: false } : FormModel.titleMoves(values.title, values.body)
     const island = islandJson({
         mode: mode,
         notebooks: view.notebooks.map(item => ({ id: item.id, path: item.path })),
@@ -229,10 +253,18 @@ export function buildFormHtml(view: FormView): string {
     })), noteTabs)
     const textInput = 'autocomplete="off" autocorrect="off" autocapitalize="off"'
     // The textarea's content starts with a newline because the HTML parser drops one there: a Text that itself starts with an empty line keeps it.
+    const titleInput = `<textarea name="title" id="jotTitle" class="jot-input jot-grow" rows="1" autocomplete="off" autofocus>\n${escapeHtml(values.title)}</textarea>`
+    const titleField = editing ? titleInput : `<div class="jot-field">
+                    ${titleInput}
+                    ${moveButton("jotTitleDown", "down", TITLE_DOWN_LABEL, "ArrowDown", ARROW_DOWN_ICON)}
+                </div>`
     const textRow = editing ? "" : `
             <div class="jot-row jot-row-top">
                 <label class="jot-label" for="jotBody">Text</label>
-                <textarea name="body" id="jotBody" class="jot-input" rows="3" autocomplete="off" placeholder="Optional">\n${escapeHtml(values.body)}</textarea>
+                <div class="jot-field">
+                    <textarea name="body" id="jotBody" class="jot-input" rows="3" autocomplete="off" placeholder="Optional">\n${escapeHtml(values.body)}</textarea>
+                    ${moveButton("jotBodyUp", "up", TEXT_UP_LABEL, "ArrowUp", ARROW_UP_ICON)}
+                </div>
             </div>`
     const hint = view.mobile ? "" : `<span class="jot-hint" aria-hidden="true">Enter ${editing ? "saves" : "creates"} · Esc cancels</span>`
 
@@ -240,13 +272,13 @@ export function buildFormHtml(view: FormView): string {
         ${style}
         ${platformMarker}
         <script type="application/json" id="jotFormData">${island}</script>
-        <form name="jot" id="jotForm" class="jot-form${view.mobile ? " -mobile" : ""}${isNote ? " -note" : ""}" autocomplete="off">
+        <form name="jot" id="jotForm" class="jot-form${view.mobile ? " -mobile" : ""}${isNote ? " -note" : ""}${moves.down ? " -can-down" : ""}${moves.up ? " -can-up" : ""}" autocomplete="off">
             <div class="jot-head">
                 <strong id="jotHeading" class="jot-heading">${escapeHtml(FormModel.headingFor(type, mode))}</strong>${hint}
             </div>${view.timing ? '\n            <div id="jotTiming" class="jot-timing"></div>' : ""}${typeRow}
             <div class="jot-row jot-row-top">
                 <label class="jot-label" for="jotTitle">Title</label>
-                <textarea name="title" id="jotTitle" class="jot-input jot-grow" rows="1" autocomplete="off" autofocus>\n${escapeHtml(values.title)}</textarea>
+                ${titleField}
             </div>${textRow}
             <div class="jot-row">
                 <label class="jot-label" for="jotNotebook">Notebook</label>

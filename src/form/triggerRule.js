@@ -9,6 +9,10 @@
  * fires, which is how the setting turns the route off. Which insertions are typed (not paste, undo, redo or Jot's own edits) and when composition  *
  * is over are the content script's to decide; this module only sees the text.                                                                     *
  *                                                                                                                                                  *
+ * IN CODE. A trigger inside code never fires: in a fenced code block, an indented code block or an inline code span, "++" is code (i++, a C++ line, *
+ * a diff). Where the trigger stands is the editor's to tell: the content script reads the names of the syntax nodes around it from the Markdown     *
+ * tree Joplin's editor parses the note into, the one that colours the code, and inCode says whether one of them is code.                          *
+ *                                                                                                                                                  *
  * THE CANCELLED OCCURRENCES. When the user cancels the form, the content script remembers the occurrence ({ from, to, text }) and maps it through   *
  * every later change by its END (so text typed after it, or before it, moves it along). It stays remembered while the document still holds that    *
  * same trigger text there, after a line start or whitespace (occurrenceHolds); any change that alters it - a character deleted or retyped inside    *
@@ -24,6 +28,9 @@
 
     // The setting's default (brief 4.6).
     var DEFAULT_TRIGGER = '++'
+    // The code nodes of the Markdown syntax tree (@lezer/markdown, as Joplin's editor parses a note): a fenced code block, an indented code block, an
+    // inline code span.
+    var CODE_NODES = ['FencedCode', 'CodeBlock', 'InlineCode']
 
     function text(value){ return value == null ? '' : String(value) }
 
@@ -88,8 +95,21 @@
         return { fires: !known, from: occurrence.from, to: occurrence.to, cancelled: known }
     }
 
+    /** inCode ******************************************************************************************************************************************
+     * Whether a trigger is in code, from the names of the syntax nodes around it (innermost first, as the content script reads them): one of them is a  *
+     * fenced code block, an indented code block or an inline code span. Anything that is not a list of names (no syntax tree to read) is not code, so   *
+     * an editor that cannot tell fires the trigger as it always did.                                                                                   *
+     ***************************************************************************************************************************************************/
+    function inCode(names){
+        if (!Array.isArray(names)) return false
+        for (var index = 0; index < names.length; index++) if (CODE_NODES.indexOf(names[index]) >= 0) return true
+        return false
+    }
+
     return {
         DEFAULT_TRIGGER: DEFAULT_TRIGGER,
+        CODE_NODES: CODE_NODES,
+        inCode: inCode,
         normalizeTrigger: normalizeTrigger,
         contextRange: contextRange,
         occurrenceHolds: occurrenceHolds,
