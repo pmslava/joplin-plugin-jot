@@ -4,10 +4,11 @@
  * them.                                                                                                                                            *
  *                                                                                                                                                  *
  * THE COMMAND CONTRACT (brief section 6, formModel.openRequest). jot.open with { mode: 'edit', noteId } is edit mode and resolves { id, changed }  *
- * (the fields written, among title, parent_id, is_todo, todo_due, tags) or null; with { mode: 'new', type?, title?, body?, notebookId? } it is     *
- * create mode on the caller's route, those presets in the fields, no selection read and no In this note row, and resolves { id, opened, pinned }   *
- * or null; with no argument, or a mode the contract does not know, it is the shortcut's behaviour (openJot, the selection route when text is       *
- * highlighted).                                                                                                                                    *
+ * (the fields written, among title, parent_id, is_todo, todo_due, tags) or null; with { mode: 'new', type?, title?, body?, notebookId?, due? } it  *
+ * is create mode on the caller's route, those presets in the fields, no selection read and no In this note row, and resolves                       *
+ * { id, opened, pinned } or null; with no argument, or a mode the contract does not know, it is the shortcut's behaviour (openJot, the selection   *
+ * route when text is highlighted). due (0.5.0, Cockpit's day headings: ms since the epoch) starts the Due row on dueFields(due); it is a to-do's,  *
+ * so on a note the row shows it greyed and Create writes no due, the form's rule for a switch to Note.                                             *
  *                                                                                                                                                  *
  * EDIT MODE (brief 4.5). The form prefilled from GET notes/:id (title, is_todo, parent_id, todo_due) and GET notes/:id/tags: Type, Title,          *
  * Notebook, Tags and Due, no Text and no In this note, with Save and Cancel. Save writes only what changed (formModel.planEdit): one PUT notes/:id *
@@ -107,12 +108,14 @@ export const FORM_SCRIPTS = [
 /** Types *******************************************************************************************************************************************/
 // What a route or a caller can preset. The selection route presets the title and body split from the selection, and carries the selection itself
 // (Add a link after it writes it back); the trigger route carries the trigger typed (printed in its In this note labels); another plugin's
-// jot.open { mode: 'new' } presets type, title, body and notebookId (formModel.openRequest keeps each only when it has the right shape).
+// jot.open { mode: 'new' } presets type, title, body, notebookId and due (formModel.openRequest keeps each only when it has the right shape).
 export interface FormPresets {
     type?: string
     title?: string
     body?: string
     notebookId?: string
+    // The Due row's start, ms since the epoch (0.5.0: Cockpit's day headings); the fields are dueFields(due).
+    due?: number
     selection?: string
     trigger?: string
     // Internal: the open's stopwatch, started at the tap (openJot), so the selection read is timed too (core/timing.ts).
@@ -252,8 +255,8 @@ export async function openJot(route: string): Promise<FormOutcome | null> {
  * Opens the form and applies what the user chose. `route` names the way in ("menu" for Tools > Jot… and its shortcut, "contextMenu" for the        *
  * editor's right-click menu, "button" for the toolbar, "caller" for another plugin's { mode: 'new' }, all four the same plain form; "selection"    *
  * for highlighted text, which adds the In this note row). `presets` fill the fields: type, title, body, notebookId (passed over when it is not a   *
- * notebook). Resolves { id, opened, pinned } when a note was created (pinned: true only when Note Tabs pinned it), null when nothing was (Cancel,  *
- * Escape, an empty Create, no notebook to create in, or a form already open).                                                                      *
+ * notebook), due (the Due row, dueFields). Resolves { id, opened, pinned } when a note was created (pinned: true only when Note Tabs pinned it),   *
+ * null when nothing was (Cancel, Escape, an empty Create, no notebook to create in, or a form already open).                                       *
  ***************************************************************************************************************************************************/
 export async function openForm(route: string, presets: FormPresets = {}): Promise<FormOutcome | null> {
     const created = await withFormOpen(() => runForm(route, presets || {}))
@@ -392,6 +395,8 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
     const inThisNoteChoices = row.choices
     const open = FormModel.openChoice(openDefault, mobile)
     const mobileWidth = mobile ? formWidthOnMobile() : null
+    // A caller's due (0.5.0) starts the Due row; without one, dueFields gives the empty row of a fresh form.
+    const due = FormModel.dueFields(presets.due)
 
     let values: FormValues = {
         type: resolvedType,
@@ -399,8 +404,8 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
         body: presets.body || "",
         notebookId: shown.notebookId,
         tags: parentTags,
-        dueDate: "",
-        dueTime: "",
+        dueDate: due.date,
+        dueTime: due.time,
         inThisNote: row.value,
         backlink: shown.backlink ? (shown.backlink.on ? FormModel.BACKLINK_ADD : FormModel.BACKLINK_NONE) : "",
         open: open,

@@ -90,7 +90,9 @@ With the [Note Tabs](https://github.com/benji300/joplin-note-tabs) plugin instal
 
 ## For other plugins
 
-`joplin.commands.execute('jot.open', args)`: with `{ mode: 'new', type, title, body, notebookId }` it opens the form with those presets and resolves `{ id, opened, pinned }`, or `null` on Cancel; with `{ mode: 'edit', noteId }` it opens edit mode and resolves `{ id, changed }`, the list of fields written, or `null`. With no arguments it behaves as the shortcut.
+`joplin.commands.execute('jot.open', args)`: with `{ mode: 'new', type, title, body, notebookId, due }` it opens the form with those presets and resolves `{ id, opened, pinned }`, or `null` on Cancel; with `{ mode: 'edit', noteId }` it opens edit mode and resolves `{ id, changed }`, the list of fields written, or `null`. With no arguments it behaves as the shortcut.
+
+`due` (Jot 0.5.0 and later; an older Jot ignores it) is a to-do's due date in milliseconds since the epoch: the form's Due row starts on that date and time. With `type: 'note'` the row is greyed and no due date is written, as when you switch the form to Note.
 
 ## Build from source
 

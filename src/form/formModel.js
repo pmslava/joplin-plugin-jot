@@ -366,9 +366,9 @@
     }
 
     /** dueFields ***************************************************************************************************************************************
-     * The inverse of dueTimestamp, for edit mode's prefill: a to-do's todo_due as the Due fields, the local YYYY-MM-DD and HH:MM ({ date, time }), or  *
-     * both empty when there is no due date (0, nothing, anything unreadable). The seconds are dropped, as the fields show minutes only; planEdit       *
-     * compares at the same resolution, so a due that is not touched is never rewritten.                                                                *
+     * The inverse of dueTimestamp, for edit mode's prefill and for create mode's due preset (jot.open { mode: 'new', due }): a to-do's todo_due as the *
+     * Due fields, the local YYYY-MM-DD and HH:MM ({ date, time }), or both empty when there is no due date (0, nothing, anything unreadable). The      *
+     * seconds are dropped, as the fields show minutes only; planEdit compares at the same resolution, so a due that is not touched is never rewritten. *
      ***************************************************************************************************************************************************/
     function dueFields(timestamp){
         var value = Number(timestamp)
@@ -503,8 +503,9 @@
     /** openRequest / noteIdFrom ************************************************************************************************************************
      * What jot.open was asked for (brief section 6), from the command's one argument:                                                                  *
      *   { mode: 'edit', noteId }   edit mode on that note (noteId '' when the argument carries no usable id).                                          *
-     *   { mode: 'new', presets }   create mode with the caller's presets, each kept only when it has the right shape: type 'todo' or 'note', title     *
-     *                              and body strings, notebookId a non-empty string (one that is not a notebook is passed over by the default order).   *
+     *   { mode: 'new', presets }   create mode with the caller's presets, each kept only when it has the right shape: type 'todo' or 'note', title and *
+     *                              body strings, notebookId a non-empty string (one that is not a notebook is passed over by the default order), due a *
+     *                              finite number above 0, ms since the epoch (0.5.0: the Due row starts on it, dueFields).                             *
      *   { mode: 'default' }        no argument, a mode the contract does not know, or anything that is not an object: the shortcut behaviour.          *
      * noteIdFrom is the note id in a command argument: a non-empty string as it is, or the first of an array (the note list's context menu passes the  *
      * selected notes' ids, and the first is taken); '' for anything else.                                                                              *
@@ -523,6 +524,7 @@
             if (typeof spec.title === 'string') presets.title = spec.title
             if (typeof spec.body === 'string') presets.body = spec.body
             if (typeof spec.notebookId === 'string' && spec.notebookId) presets.notebookId = spec.notebookId
+            if (typeof spec.due === 'number' && Number.isFinite(spec.due) && spec.due > 0) presets.due = spec.due
             return { mode: 'new', presets: presets }
         }
         return { mode: 'default' }

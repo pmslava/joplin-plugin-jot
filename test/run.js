@@ -1649,6 +1649,48 @@ async function main() {
         assert.deepStrictEqual(odd.executes, [])
     })
 
+    await check('jot.open { mode: \'new\', due } (0.5.0, Cockpit\'s day headings): a to-do\'s Due row starts on dueFields(due) and Create writes that due as todo_due; a note keeps the form\'s rule (the row greyed, no due written); a due of the wrong shape leaves the row empty; the resolve shape is unchanged', async () => {
+        const due = new Date(2026, 10, 12, 9, 0, 0, 0).getTime()
+        const dueOf = html => ({
+            date: (/name="dueDate" id="jotDueDate" value="([^"]*)"/.exec(html) || [])[1],
+            time: (/name="dueTime" id="jotDueTime" value="([^"]*)"/.exec(html) || [])[1],
+        })
+        // Create sends what the form shows: the dialog answers with the Due fields read back from the markup it was given.
+        const echo = (fields) => (state) => {
+            const shown = dueOf(state.dialogHtml[state.dialogHtml.length - 1])
+            return formResult('ok', { dueDate: shown.date, dueTime: shown.time, ...fields })
+        }
+        const todo = await runBundle({ ...FORM_BASE, openDialog: echo({ title: 'Call the bank' }) })
+        const outcome = await withWarnings(todo, () => todo.commands.find(item => item.name === 'jot.open').execute({ mode: 'new', type: 'todo', due }))
+        const html = todo.dialogHtml[0]
+        assert.deepStrictEqual(dueOf(html), { date: '2026-11-12', time: '09:00' }, 'the hidden Due fields')
+        assert.ok(html.includes('id="jotDueText" class="jot-due-text">2026-11-12 09:00</span>'), 'the Due row\'s text')
+        assert.ok(/id="alarmDate" placeholder="YYYY-MM-DD" value="2026-11-12"/.test(html) && /id="alarmTime" placeholder="HH:MM" value="09:00"/.test(html), 'the picker\'s inputs')
+        assert.ok(/<button type="button" id="jotDueClear" class="jot-link">No date<\/button>/.test(html), 'No date shown and enabled')
+        assert.deepStrictEqual(notePosts(todo).map(post => [post.body.is_todo, post.body.title, post.body.todo_due]), [[1, 'Call the bank', due]])
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: false, pinned: false })
+        // A note: the row shows the date greyed (bell and No date disabled), and Create writes no due - a switch to Note in the form does the same.
+        const note = await runBundle({ ...FORM_BASE, openDialog: echo({ type: 'note', title: 'A note' }) })
+        await withWarnings(note, () => note.commands.find(item => item.name === 'jot.open').execute({ mode: 'new', type: 'note', due }))
+        const noteHtml = note.dialogHtml[0]
+        assert.deepStrictEqual(dueOf(noteHtml), { date: '2026-11-12', time: '09:00' }, 'kept in the form, so a switch to To-do restores it')
+        assert.ok(/id="jotBell"[^>]* disabled>/.test(noteHtml) && /id="jotDueClear" class="jot-link" disabled>/.test(noteHtml), 'the row greyed')
+        assert.deepStrictEqual(notePosts(note).map(post => [post.body.is_todo, post.body.todo_due]), [[0, 0]])
+        // No type: the setting's (to-do by default) takes the due.
+        const plain = await runBundle({ ...FORM_BASE, openDialog: echo({ title: 'Plain' }) })
+        await withWarnings(plain, () => plain.commands.find(item => item.name === 'jot.open').execute({ mode: 'new', due }))
+        assert.deepStrictEqual(dueOf(plain.dialogHtml[0]), { date: '2026-11-12', time: '09:00' })
+        assert.deepStrictEqual(notePosts(plain).map(post => post.body.todo_due), [due])
+        // Wrong shapes: the row starts empty, as without a due.
+        for (const wrong of ['2026-11-12', String(due), 0, -due, NaN, Infinity, null, { due }, [due], new Date(due), true]) {
+            const odd = await runBundle({ ...FORM_BASE })
+            await withWarnings(odd, () => odd.commands.find(item => item.name === 'jot.open').execute({ mode: 'new', type: 'todo', due: wrong }))
+            const oddHtml = odd.dialogHtml[0]
+            assert.deepStrictEqual(dueOf(oddHtml), { date: '', time: '' }, String(wrong))
+            assert.ok(oddHtml.includes('id="jotDueText" class="jot-due-text">No date</span>'), String(wrong))
+        }
+    })
+
     await check('jot.open with no argument, or one the contract does not know, is the shortcut\'s behaviour: the selection read first, then the plain form, or the selection route when text is highlighted', async () => {
         for (const args of [undefined, null, {}, { mode: 'open' }, { mode: 'EDIT', noteId: 'nEdit' }, 'edit', ['nEdit'], 7]) {
             const state = await runBundle({ ...FORM_BASE, ...EDIT_BASE })
@@ -1929,6 +1971,16 @@ async function main() {
         }
         assert.deepStrictEqual([FormModel.noteIdFrom(['a', 'b']), FormModel.noteIdFrom('a'), FormModel.noteIdFrom([]), FormModel.noteIdFrom([3]), FormModel.noteIdFrom(null), FormModel.noteIdFrom({ id: 'a' })],
             ['a', 'a', '', '', '', ''])
+    })
+
+    await check('formModel.openRequest keeps a due preset (0.5.0) only as a finite number above 0, ms since the epoch; a string, 0, a negative, NaN, Infinity, an object, an array, a Date or a boolean is dropped like an unknown key; edit mode takes none', () => {
+        const due = new Date(2026, 10, 12, 9, 0).getTime()
+        assert.deepStrictEqual(FormModel.openRequest({ mode: 'new', type: 'todo', title: 'T', due }), { mode: 'new', presets: { type: 'todo', title: 'T', due } })
+        assert.deepStrictEqual(FormModel.openRequest({ mode: 'new', due: 1 }), { mode: 'new', presets: { due: 1 } })
+        for (const wrong of ['2026-11-12', String(due), 0, -1, -due, NaN, Infinity, -Infinity, null, undefined, {}, { due }, [due], new Date(due), true]) {
+            assert.deepStrictEqual(FormModel.openRequest({ mode: 'new', type: 'todo', due: wrong }), { mode: 'new', presets: { type: 'todo' } }, String(wrong))
+        }
+        assert.deepStrictEqual(FormModel.openRequest({ mode: 'edit', noteId: 'n1', due }), { mode: 'edit', noteId: 'n1' })
     })
 
     await check('formModel.editStart: the prefill from the note and its tags - type, title, notebook, the tags as a sorted csv, the Due fields of a to-do only, and each tag\'s id by its tagKey', () => {
