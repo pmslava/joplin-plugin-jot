@@ -33,6 +33,9 @@ jobs:
     env:
       # Must be >= the plugin's manifest app_min_version. Keep in sync with scripts/setup-e2e.sh.
       JOPLIN_E2E_VERSION: 3.6.14
+      # The Cockpit release the Cockpit pin spec installs beside Jot (cockpit.pinNotes, 2.11.1 or later). Keep in sync with
+      # scripts/setup-e2e.sh and e2e/launch.ts.
+      COCKPIT_E2E_VERSION: 2.11.1
     steps:
       - uses: actions/checkout@v4
 

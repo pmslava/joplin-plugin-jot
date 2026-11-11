@@ -89,13 +89,14 @@ test.describe('Note Tabs: Pin the new note (desktop)', () => {
     return pending;
   }
 
-  /** Jot's "Pin the new note in Note Tabs" on the Options screen, by the option's label; then the second Joplin waits before telling plugins. */
+  /** Jot's "Pin the new note" on the Options screen, by the option's label (the target left on Note Tabs, its default); then the second Joplin
+   * waits before telling plugins. */
   async function setNoteTabsSetting(win: Page, option: string): Promise<void> {
     expect(await activateJoplinMenuItem(win, /^(Options|Preferences\.\.\.)$/)).toBe(true);
     const screen = win.locator('.config-screen');
     await screen.waitFor({ state: 'visible', timeout: 60_000 });
     await screen.getByRole('tab', { name: 'Jot', exact: true }).first().click();
-    const field = win.getByLabel('Pin the new note in Note Tabs', { exact: true }).first();
+    const field = win.getByLabel('Pin the new note', { exact: true }).first();
     await field.waitFor({ state: 'visible', timeout: 30_000 });
     await expect(field.locator('option')).toHaveText(['Not used', 'Pin', "Don't pin"]);
     await field.selectOption({ label: option });
@@ -124,7 +125,7 @@ test.describe('Note Tabs: Pin the new note (desktop)', () => {
     const title = `Pinned ${stamp}`;
     const pending = startJot(win);
     const form = await formFrame(win);
-    await expect(form.locator('#jotNoteTabsRow .jot-label')).toHaveText('Note Tabs');
+    await expect(form.locator('#jotNoteTabsRow .jot-label')).toHaveText('Pin in Note Tabs');
     await expect(form.locator('#jotNoteTabsRow .jot-seg-option')).toHaveText(['Pin', "Don't pin"]);
     await expect(form.locator('#jotNoteTabs')).toHaveValue('pin');
     await expect(form.locator('#jotNoteTabsRow .jot-seg-option[data-value="pin"]')).toHaveAttribute('aria-checked', 'true');

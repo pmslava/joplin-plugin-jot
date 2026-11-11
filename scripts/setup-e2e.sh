@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
 # Downloads and extracts the Joplin desktop AppImage used by the real-app E2E tests, and downloads the
-# released Note Tabs plugin (.jpl) that the Note Tabs spec installs beside Jot.
+# released Note Tabs and Cockpit plugins (.jpl) that the Note Tabs and Cockpit pin specs install beside Jot.
 # Idempotent: skips each download/extract when its result already exists.
 #
 # Override the versions with JOPLIN_E2E_VERSION (must be >= the plugin's app_min_version) and
-# NOTE_TABS_E2E_VERSION (a Note Tabs release whose tabsPinNote takes an array of note ids: 1.1.0 or later).
+# NOTE_TABS_E2E_VERSION (a Note Tabs release whose tabsPinNote takes an array of note ids: 1.1.0 or later) and
+# COCKPIT_E2E_VERSION (a Cockpit release with cockpit.pinNotes: 2.11.1 or later).
 #
 set -euo pipefail
 
@@ -19,10 +20,14 @@ NOTE_TABS_VERSION="${NOTE_TABS_E2E_VERSION:-1.4.0}"
 # The version is in the file name, so a bumped NOTE_TABS_E2E_VERSION fetches its own archive rather than keeping the old one (e2e/launch.ts reads the same name).
 NOTE_TABS_JPL="$CACHE_DIR/joplin.plugin.note.tabs-${NOTE_TABS_VERSION}.jpl"
 NOTE_TABS_URL="https://github.com/benji300/joplin-note-tabs/releases/download/v${NOTE_TABS_VERSION}/joplin.plugin.note.tabs.jpl"
+COCKPIT_VERSION="${COCKPIT_E2E_VERSION:-2.11.1}"
+# The same rule for Cockpit's archive (e2e/launch.ts, COCKPIT_JPL, reads the same name).
+COCKPIT_JPL="$CACHE_DIR/io.github.pmslava.cockpit-${COCKPIT_VERSION}.jpl"
+COCKPIT_URL="https://github.com/pmslava/joplin-plugin-cockpit/releases/download/v${COCKPIT_VERSION}/io.github.pmslava.cockpit.jpl"
 
 mkdir -p "$CACHE_DIR"
 
-# Note Tabs first, because the Joplin half below exits early once the AppImage is extracted, which on a
+# Note Tabs and Cockpit first, because the Joplin half below exits early once the AppImage is extracted, which on a
 # developer machine is every run but the first.
 if [ ! -f "$NOTE_TABS_JPL" ]; then
   echo "[setup-e2e] Downloading Note Tabs $NOTE_TABS_VERSION ..."
@@ -50,6 +55,30 @@ if [ ! -f "$NOTE_TABS_JPL" ]; then
   mv "$NOTE_TABS_JPL.part" "$NOTE_TABS_JPL"
 else
   echo "[setup-e2e] Note Tabs already at $NOTE_TABS_JPL — nothing to do."
+fi
+
+# Cockpit exactly as Note Tabs: a .part file, the HTTP, size and manifest checks, and the final name only once they pass.
+if [ ! -f "$COCKPIT_JPL" ]; then
+  echo "[setup-e2e] Downloading Cockpit $COCKPIT_VERSION ..."
+  rm -f "$COCKPIT_JPL.part"
+  if ! curl -fSL --retry 3 --retry-delay 2 -o "$COCKPIT_JPL.part" "$COCKPIT_URL"; then
+    echo "[setup-e2e] ERROR: failed to download Cockpit $COCKPIT_VERSION from $COCKPIT_URL" >&2
+    rm -f "$COCKPIT_JPL.part"
+    exit 1
+  fi
+  if [ "$(stat -c%s "$COCKPIT_JPL.part" 2>/dev/null || echo 0)" -lt 20000 ]; then
+    echo "[setup-e2e] ERROR: downloaded Cockpit plugin is implausibly small — treating as a failed download" >&2
+    rm -f "$COCKPIT_JPL.part"
+    exit 1
+  fi
+  if ! tar -tf "$COCKPIT_JPL.part" manifest.json >/dev/null 2>&1; then
+    echo "[setup-e2e] ERROR: downloaded Cockpit plugin is not a plugin archive (no manifest.json in the tar)" >&2
+    rm -f "$COCKPIT_JPL.part"
+    exit 1
+  fi
+  mv "$COCKPIT_JPL.part" "$COCKPIT_JPL"
+else
+  echo "[setup-e2e] Cockpit already at $COCKPIT_JPL — nothing to do."
 fi
 
 if [ -x "$BINARY" ]; then

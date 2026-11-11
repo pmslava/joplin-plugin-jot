@@ -38,6 +38,8 @@
     var NOTEBOOK_GONE_MESSAGE = 'Jot: that notebook no longer exists. Pick another one.'
     // Pin asked for, and no Note Tabs to do it (not installed, or off): the note is created all the same. The host says it once a run (issue 7).
     var NOTE_TABS_MISSING_MESSAGE = 'Jot: the note is created, but Note Tabs is not installed or is off, so it was not pinned.'
+    // The same for Cockpit's Pinned section (0.6.0, Cockpit's brief 2.11 section 8, word for word), said once a run on its own.
+    var COCKPIT_MISSING_MESSAGE = 'Jot: the note is created, but Cockpit is not installed or is off, so it was not pinned there.'
     var NO_DATE = 'No date'
     var DEFAULT_DAY_START = '09:00'
 
@@ -85,9 +87,9 @@
         window: 'Create the note and open it in a window of its own',
     }
 
-    // The Note Tabs row (issue 7): pin the new note as a tab in the Note Tabs plugin (joplin.plugin.note.tabs), or leave Note Tabs as it is. The
-    // noteTabs setting is its default and says whether the row is drawn at all: NOTE_TABS_OFF (Not used, the setting's default) draws none, and
-    // Note Tabs is never called.
+    // The Pin row (issue 7, the Note Tabs row until 0.6.0): pin the new note - as a tab in the Note Tabs plugin (joplin.plugin.note.tabs), in
+    // Cockpit's Pinned section, or both, by the pin target below - or leave them as they are. The noteTabs setting is its default and says
+    // whether the row is drawn at all: NOTE_TABS_OFF (Not used, the setting's default) draws none, and no plugin is ever called.
     var NOTE_TABS_OFF = 'off'
     var NOTE_TABS_PIN = 'pin'
     var NOTE_TABS_NONE = 'none'
@@ -95,6 +97,25 @@
     var NOTE_TABS_TITLES = {
         pin: 'Create the note and pin it as a tab in Note Tabs',
         none: 'Create the note and leave Note Tabs as it is',
+    }
+
+    // Where the row's Pin pins (0.6.0), the pinTarget setting: the Note Tabs plugin (the default, 0.3.0's behaviour), Cockpit's Pinned section
+    // (io.github.pmslava.cockpit, its cockpit.pinNotes command), or both, Note Tabs first. The row's label names the target, and its buttons'
+    // tooltips say what each does there.
+    var PIN_TARGET_NOTE_TABS = 'noteTabs'
+    var PIN_TARGET_COCKPIT = 'cockpit'
+    var PIN_TARGET_BOTH = 'both'
+    var PIN_ROW_LABELS = { noteTabs: 'Pin in Note Tabs', cockpit: 'Pin in Cockpit', both: 'Pin in both' }
+    var PIN_TITLES = {
+        noteTabs: NOTE_TABS_TITLES,
+        cockpit: {
+            pin: "Create the note and pin it in Cockpit's Pinned section",
+            none: "Create the note and leave Cockpit's Pinned section as it is",
+        },
+        both: {
+            pin: "Create the note and pin it in Note Tabs and in Cockpit's Pinned section",
+            none: 'Create the note and leave Note Tabs and Cockpit as they are',
+        },
     }
 
     // The Back link row: add a line linking to the note the user is in, or not. The setting backlink is its default (off); the line's text is the
@@ -184,6 +205,20 @@
         if (list.indexOf(value) >= 0) return value
         if (list.indexOf(fallback) >= 0) return fallback
         return NOTE_TABS_NONE
+    }
+
+    /** pinTargetChoice / pinTargets ********************************************************************************************************************
+     * The pin target that holds (0.6.0): the value when it is one of the three, else Note Tabs, the setting's default and 0.3.0's only target. And     *
+     * the plugins a Pin calls for it, in order: Note Tabs, Cockpit, or Note Tabs then Cockpit.                                                         *
+     ***************************************************************************************************************************************************/
+    function pinTargetChoice(value){
+        return value === PIN_TARGET_COCKPIT || value === PIN_TARGET_BOTH ? value : PIN_TARGET_NOTE_TABS
+    }
+
+    function pinTargets(value){
+        var target = pinTargetChoice(value)
+        if (target === PIN_TARGET_BOTH) return [PIN_TARGET_NOTE_TABS, PIN_TARGET_COCKPIT]
+        return [target]
     }
 
     /** backlinkText ************************************************************************************************************************************
@@ -453,16 +488,17 @@
      *   { kind: 'none' }       Cancel, Escape, or a result with no button.                                                                             *
      *   { kind: 'nothing' }    Create with an empty Title and an empty Text: nothing is created, the form just closes.                                 *
      *   { kind: 'invalidDue' } a to-do whose Due fields cannot be read: Create is refused with DUE_MESSAGE and the form reopens with its values.       *
-     *   { kind: 'create', note, tags, open, pin }  the POST notes payload, the tag titles to attach, where to open the note: '' (stay), 'editor' or    *
-     *                          'window', from the Open row (openChoice: a result without the field reads as options.openDefault), and whether to pin   *
-     *                          it in Note Tabs, from the Note Tabs row (noteTabsChoice: a result without the field reads as options.noteTabsDefault).  *
+     *   { kind: 'create', note, tags, open, pin, pinTarget }  the POST notes payload, the tag titles to attach, where to open the note: '' (stay),     *
+     *                          'editor' or 'window', from the Open row (openChoice: a result without the field reads as options.openDefault), whether  *
+     *                          to pin it, from the Pin row (noteTabsChoice: a result without the field reads as options.noteTabsDefault), and where:   *
+     *                          options.pinTarget as pinTargetChoice reads it (0.6.0), whatever the row says.                                           *
      * Create with both fields empty and the Open row on the editor or a window creates the empty note and opens it (Joplin's own New note, one step    *
-     * later); with Open on No it creates nothing, whatever the Note Tabs row says. A note has no due date, so its Due fields are neither read nor      *
-     * validated (switching to Note clears nothing in the form, but writes none of it). options: { defaultType, dayStart, notebookId,                   *
-     * inThisNoteChoices, inThisNoteDefault, mobile, openDefault, noteTabsDefault, backlink } - the type a result without one reads as, the day start   *
-     * time, the notebook used when the form sent none, the In this note choices the form offered (the selection and trigger routes) and the route's    *
-     * default choice, whether the Open row offered no window, the Open row's default, the Note Tabs row's default ('pin' or 'none'; '' when the        *
-     * setting is Not used and the form drew no row, so nothing is pinned whatever the result says), and the back link the form offered ({ text,        *
+     * later); with Open on No it creates nothing, whatever the Pin row says. A note has no due date, so its Due fields are neither read nor validated  *
+     * (switching to Note clears nothing in the form, but writes none of it). options: { defaultType, dayStart, notebookId, inThisNoteChoices,          *
+     * inThisNoteDefault, mobile, openDefault, noteTabsDefault, pinTarget, backlink } - the type a result without one reads as, the day start time, the *
+     * notebook used when the form sent none, the In this note choices the form offered (the selection and trigger routes) and the route's default      *
+     * choice, whether the Open row offered no window, the Open row's default, the Pin row's default ('pin' or 'none'; '' when the setting is Not used  *
+     * and the form drew no row, so nothing is pinned whatever the result says), the pin target setting, and the back link the form offered ({ text,    *
      * position, on }, or null with no note to link back to). The plan's inThisNote is the choice to apply, one of those offered (anything else reads   *
      * as the route's default, inThisNoteAction), or null on a route that offered none. The back link goes into the body (composeBody) when the Back    *
      * link row says Add (a result without the field reads as backlink.on).                                                                             *
@@ -488,6 +524,7 @@
             values: values,
             open: open === OPEN_NO ? '' : open,
             pin: !!tabsDefault && noteTabsChoice(values.noteTabs || tabsDefault, tabsDefault) === NOTE_TABS_PIN,
+            pinTarget: pinTargetChoice(settings.pinTarget),
             inThisNote: choices.length ? inThisNoteAction(values.inThisNote, choices, settings.inThisNoteDefault) : null,
             note: {
                 parent_id: values.notebookId || text(settings.notebookId),
@@ -883,6 +920,7 @@
         NO_NOTE_MESSAGE: NO_NOTE_MESSAGE,
         NOTEBOOK_GONE_MESSAGE: NOTEBOOK_GONE_MESSAGE,
         NOTE_TABS_MISSING_MESSAGE: NOTE_TABS_MISSING_MESSAGE,
+        COCKPIT_MISSING_MESSAGE: COCKPIT_MISSING_MESSAGE,
         NO_DATE: NO_DATE,
         DEFAULT_DAY_START: DEFAULT_DAY_START,
         KEEP: KEEP,
@@ -900,6 +938,11 @@
         NOTE_TABS_NONE: NOTE_TABS_NONE,
         NOTE_TABS_LABELS: NOTE_TABS_LABELS,
         NOTE_TABS_TITLES: NOTE_TABS_TITLES,
+        PIN_TARGET_NOTE_TABS: PIN_TARGET_NOTE_TABS,
+        PIN_TARGET_COCKPIT: PIN_TARGET_COCKPIT,
+        PIN_TARGET_BOTH: PIN_TARGET_BOTH,
+        PIN_ROW_LABELS: PIN_ROW_LABELS,
+        PIN_TITLES: PIN_TITLES,
         BACKLINK_ADD: BACKLINK_ADD,
         BACKLINK_NONE: BACKLINK_NONE,
         BACKLINK_LABELS: BACKLINK_LABELS,
@@ -914,6 +957,8 @@
         openChoice: openChoice,
         noteTabsChoices: noteTabsChoices,
         noteTabsChoice: noteTabsChoice,
+        pinTargetChoice: pinTargetChoice,
+        pinTargets: pinTargets,
         backlinkText: backlinkText,
         composeBody: composeBody,
         triggerShortLabels: triggerShortLabels,

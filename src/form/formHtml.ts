@@ -18,11 +18,11 @@
  * THE SELECTORS are one-line segmented controls, one builder for all (segmentRow): Type (Note, To-do); In this note on the selection and trigger   *
  * routes (Replace with link, Keep text and, in the Markdown editor, Add link after; or Replace ++ with link and Remove ++ - short labels, the full *
  * wording as each button's tooltip, the default first); Back link (Add, Don't add) when there is a note to link back to, the line it would add as  *
- * the Add button's tooltip; Open (No, In editor, New window; no window on mobile); and Note Tabs (Pin, Don't pin) when its setting is Pin or Don't *
- * pin, starting there (issue 7; Not used draws no row). Each is a radiogroup of buttons over a hidden input named after its field, so the form     *
- * sends the choice. The island carries the In this note list and the starting choice with the route's default ({ choices, value, fallback }, null  *
- * on the plain routes), so the markup and the island never disagree. Notebook and Tags stay text fields with their suggestion lists, and Due stays *
- * last, so unfolding its picker pushes nothing down.                                                                                               *
+ * the Add button's tooltip; Open (No, In editor, New window; no window on mobile); and the Pin row (Pin, Don't pin) when its setting is Pin or     *
+ * Don't pin, starting there (issue 7; Not used draws no row), labelled by where it pins: Pin in Note Tabs, Pin in Cockpit or Pin in both (0.6.0).  *
+ * Each is a radiogroup of buttons over a hidden input named after its field, so the form sends the choice. The island carries the In this note     *
+ * list and the starting choice with the route's default ({ choices, value, fallback }, null on the plain routes), so the markup and the island     *
+ * never disagree. Notebook and Tags stay text fields with their suggestion lists, and Due stays last, so unfolding its picker pushes nothing down. *
  *                                                                                                                                                  *
  * TITLE AND TAGS are textareas of one row (.jot-grow) only so they can wrap: formWebview.js grows them to three lines and then lets them scroll       *
  * (issue 4), keeps Enter from ever making a new line in them, and turns a pasted line break into a space. Their content starts with a newline, as  *
@@ -60,7 +60,7 @@ export interface FormValues {
     backlink?: string
     // The Open choice ("no", "editor" or "window"); "" in edit mode.
     open?: string
-    // The Note Tabs choice ("pin" or "none"); "" when the row is not shown (the setting is Not used, or edit mode).
+    // The Pin row's choice ("pin" or "none"); "" when the row is not shown (the setting is Not used, or edit mode).
     noteTabs?: string
 }
 
@@ -83,10 +83,13 @@ export interface FormView {
     inThisNoteDefault?: string
     // The line the Back link row would add (formModel.backlinkText), shown as the Add button's tooltip; empty or absent: no row (no note to link to).
     backlinkText?: string
-    // The Note Tabs row's default, the noteTabs setting when it is Pin or Don't pin ("pin" or "none", formModel.NOTE_TABS_PIN and NOTE_TABS_NONE):
+    // The Pin row's default, the noteTabs setting when it is Pin or Don't pin ("pin" or "none", formModel.NOTE_TABS_PIN and NOTE_TABS_NONE):
     // what values.noteTabs starts on and what a value the buttons do not offer reads as. Empty or absent: no row (the setting is Not used). Never
     // drawn in edit mode, like Open.
     noteTabsDefault?: string
+    // Where the row pins (the pinTarget setting, 0.6.0): "noteTabs", "cockpit" or "both" (formModel.pinTargetChoice; anything else is Note Tabs).
+    // The row's label names it (formModel.PIN_ROW_LABELS) and its buttons' tooltips say what they do there (PIN_TITLES).
+    pinTarget?: string
     // On mobile, the form's width in CSS pixels (core/platform.ts, formWidthOnMobile: from the screen, which the plugin's own webview reports as the
     // dialog's does); absent or null: the form fills the dialog, which Joplin opens at 97% of the window and then sizes to it - the same width.
     mobileWidth?: number | null
@@ -248,8 +251,10 @@ export function buildFormHtml(view: FormView): string {
     const openRow = editing ? "" : segmentRow("jotOpen", "open", "Open", FormModel.openChoices(view.mobile).map((value: string) => ({
         value, label: FormModel.OPEN_LABELS[value], title: FormModel.OPEN_TITLES[value],
     })), open)
-    const noteTabsRow = !noteTabs ? "" : segmentRow("jotNoteTabs", "noteTabs", "Note Tabs", FormModel.noteTabsChoices().map((value: string) => ({
-        value, label: FormModel.NOTE_TABS_LABELS[value], title: FormModel.NOTE_TABS_TITLES[value],
+    const pinTarget: string = FormModel.pinTargetChoice(view.pinTarget)
+    const pinTitles: { [choice: string]: string } = FormModel.PIN_TITLES[pinTarget]
+    const noteTabsRow = !noteTabs ? "" : segmentRow("jotNoteTabs", "noteTabs", FormModel.PIN_ROW_LABELS[pinTarget], FormModel.noteTabsChoices().map((value: string) => ({
+        value, label: FormModel.NOTE_TABS_LABELS[value], title: pinTitles[value],
     })), noteTabs)
     const textInput = 'autocomplete="off" autocorrect="off" autocapitalize="off"'
     // The textarea's content starts with a newline because the HTML parser drops one there: a Text that itself starts with an empty line keeps it.

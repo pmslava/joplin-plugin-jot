@@ -13,10 +13,11 @@
  * content script that src/trigger.ts registers; the form opens on its own route and the content script applies the answer to the editor.          *
  *                                                                                                                                                  *
  * PHASE 4: edit mode and the command contract (brief 4.5 and section 6). jot.open takes one argument: { mode: 'edit', noteId } opens edit mode and *
- * resolves { id, changed }; { mode: 'new', type?, title?, body?, notebookId?, due? } opens create mode with those presets and resolves             *
- * { id, opened, pinned }; no argument, or an unknown mode, is the shortcut's behaviour above. due (0.5.0, for Cockpit's day headings) is a to-do's *
- * due date in ms since the epoch, which the Due row starts on. jot.edit, "Edit with Jot…", is edit mode from the note list's right-click menu on   *
- * desktop, which passes the selected notes' ids: the first is edited.                                                                              *
+ * resolves { id, changed }; { mode: 'new', type?, title?, body?, notebookId?, due? } opens create mode with those presets and resolves { id,       *
+ * opened, pinned }; no argument, or an unknown mode, is the shortcut's behaviour above. due (0.5.0, for Cockpit's day headings) is a to-do's due   *
+ * date in ms since the epoch, which the Due row starts on. pinned is true when the form's Pin row pinned the new note in Note Tabs or in Cockpit's *
+ * Pinned section, whichever the pin target names (both: either one; Cockpit from 0.6.0). jot.edit, "Edit with Jot…", is edit mode from the note    *
+ * list's right-click menu on desktop, which passes the selected notes' ids: the first is edited.                                                   *
  *                                                                                                                                                  *
  * THE SANDBOX PROXY RULE: every joplin.* member is read and called in ONE expression (`await joplin.commands.register({...})`, never a member kept  *
  * in a variable and called later), because the proxy path corrupts otherwise. test/run.js audits every source file for it.                        *

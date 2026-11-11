@@ -742,11 +742,12 @@ async function main() {
     })
 
     // ---------------------------------------------------------------- settings and the toolbar gate
-    await check('settings: section Jot with exactly defaultType, defaultNotebook, textNotebook, tagsFrom, backlinkFor, backlinkTemplate, backlinkPosition, openAfterCreate, noteTabs, selectionTitle, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton on screen, and 0.2.0\'s copyTags and backlink hidden', () => {
+    await check('settings: section Jot with exactly defaultType, defaultNotebook, textNotebook, tagsFrom, backlinkFor, backlinkTemplate, backlinkPosition, openAfterCreate, noteTabs, pinTarget, selectionTitle, selectionAction, trigger, triggerAction, dayStartTime and showToolbarButton on screen, and 0.2.0\'s copyTags and backlink hidden', () => {
         assert.deepStrictEqual(desktop.sections.map(section => [section.name, section.spec.label]), [['jot', 'Jot']])
         const specs = desktop.settingSpecs
         assert.deepStrictEqual(Object.keys(specs), ['defaultType', 'defaultNotebook', 'textNotebook', 'tagsFrom', 'backlinkFor', 'backlinkTemplate', 'backlinkPosition',
-            'openAfterCreate', 'noteTabs', 'selectionTitle', 'selectionAction', 'trigger', 'triggerAction', 'dayStartTime', 'showToolbarButton', 'copyTags', 'backlink', 'listCache'],
+            'openAfterCreate', 'noteTabs', 'pinTarget', 'selectionTitle', 'selectionAction', 'trigger', 'triggerAction', 'dayStartTime', 'showToolbarButton', 'copyTags', 'backlink',
+            'listCache'],
             'every selector has its default on screen (issue 5); the 0.2.0 switches hidden, kept for the carry-over (issue 6); the stored lists hidden')
         const hidden = ['copyTags', 'backlink', 'listCache']
         for (const key of Object.keys(specs)) {
@@ -2922,7 +2923,7 @@ async function main() {
         await withWarnings(state, () => state.commands.find(item => item.name === 'jot.open').execute())
         assert.strictEqual(atOpen, afterStartup, 'no list read between the tap and the form')
         const formKeys = ['defaultType', 'dayStartTime', 'defaultNotebook', 'textNotebook', 'tagsFrom', 'backlinkFor', 'backlinkTemplate',
-            'backlinkPosition', 'openAfterCreate', 'noteTabs', 'selectionTitle', 'selectionAction', 'triggerAction']
+            'backlinkPosition', 'openAfterCreate', 'noteTabs', 'pinTarget', 'selectionTitle', 'selectionAction', 'triggerAction']
         assert.deepStrictEqual(state.settingBatches, [[...formKeys, 'showToolbarButton', 'copyTags', 'backlink', 'listCache']],
             'every setting the start and the form need, in one call at startup, which the form opens on')
         assert.deepStrictEqual(state.settingReads, [], 'and no single reads')
@@ -3436,12 +3437,12 @@ async function main() {
     const pinsOf = (state) => state.executes.filter(call => call.name === 'tabsPinNote')
     const MISSING_LINE = 'Jot: Note Tabs is not installed or is off, so the new note is not pinned'
 
-    await check('issue 7: the setting "Pin the new note in Note Tabs" - Not used (the default), Pin, Don\'t pin - is public in the Jot section, right after "Open the new note"', () => {
+    await check('issue 7: the setting "Pin the new note" (0.3.0\'s "Pin the new note in Note Tabs", key and values kept) - Not used (the default), Pin, Don\'t pin - is public in the Jot section, right after "Open the new note"', () => {
         const specs = desktop.settingSpecs
         const spec = specs.noteTabs
         assert.deepStrictEqual({ label: spec.label, description: spec.description, value: spec.value, type: spec.type, isEnum: spec.isEnum, options: spec.options, public: spec.public, section: spec.section }, {
-            label: 'Pin the new note in Note Tabs',
-            description: 'Needs the Note Tabs plugin. Pin, or Don\'t pin: the form gets a Note Tabs row that starts there, and you can switch it in the form. Not used: no row, and Note Tabs is never called.',
+            label: 'Pin the new note',
+            description: 'Pin, or Don\'t pin: the form gets a Pin row that starts there, and you can switch it in the form. Not used: no row, and nothing is ever pinned. Where it pins is the next setting.',
             value: 'off', type: 2, isEnum: true, options: { off: 'Not used', pin: 'Pin', none: 'Don\'t pin' }, public: true, section: 'jot',
         })
         assert.deepStrictEqual(Object.keys(spec.options), ['off', 'pin', 'none'], 'Not used first, then Pin, then Don\'t pin')
@@ -3473,7 +3474,7 @@ async function main() {
             assert.deepStrictEqual(labelsOf(html), ['Pin', 'Don&#39;t pin'], `${where}: Pin, then Don't pin`)
             assert.deepStrictEqual(titlesOf(html), ['Create the note and pin it as a tab in Note Tabs', 'Create the note and leave Note Tabs as it is'], `${where}: the tooltips`)
             assert.ok(/<button type="button" class="jot-seg-option -selected" data-value="pin" role="radio" aria-checked="true" tabindex="0"/.test(groupOf(html)), `${where}: Pin is the selected radio`)
-            assert.ok(html.includes('<div class="jot-row" id="jotNoteTabsRow">') && html.includes('<span class="jot-label" id="jotNoteTabsLabel">Note Tabs</span>'), `${where}: the row and its label`)
+            assert.ok(html.includes('<div class="jot-row" id="jotNoteTabsRow">') && html.includes('<span class="jot-label" id="jotNoteTabsLabel">Pin in Note Tabs</span>'), `${where}: the row and its label (0.6.0: named after the default target)`)
             assert.ok(html.includes('<div class="jot-seg" role="radiogroup" aria-labelledby="jotNoteTabsLabel" data-field="noteTabs">'), `${where}: the classes of the Open row (no -fill)`)
             assert.ok(html.includes('<div class="jot-seg" role="radiogroup" aria-labelledby="jotOpenLabel" data-field="open">'))
             assert.ok(html.indexOf('jotOpenRow') < html.indexOf('jotNoteTabsRow') && html.indexOf('jotNoteTabsRow') < html.indexOf('jotDueRow'), `${where}: after Open, before Due`)
@@ -3590,6 +3591,147 @@ async function main() {
         assert.strictEqual(segValue(state.dialogHtml[1], 'jotNoteTabs'), 'none', "Don't pin as typed, over the setting's Pin")
         assert.deepStrictEqual(pinsOf(state), [], 'nothing pinned, nothing created')
         assert.strictEqual(notePosts(state).length, 0)
+    })
+
+    // ---------------------------------------------------------------- 0.6.0: Cockpit's Pinned section as a pin target
+    // Cockpit (io.github.pmslava.cockpit, 2.11.1) pins notes in its Pinned section with cockpit.pinNotes, given an array of note ids, and resolves
+    // { pinned: ids }. Its brief (2.11 section 8) is the design: the pinTarget setting says where the Pin row pins, Note Tabs first when both.
+    const cockpitPinsOf = (state) => state.executes.filter(call => call.name === 'cockpit.pinNotes')
+    const allPinsOf = (state) => state.executes.filter(call => call.name === 'tabsPinNote' || call.name === 'cockpit.pinNotes')
+    const COCKPIT_MISSING_LINE = 'Jot: Cockpit is not installed or is off, so the new note is not pinned there'
+    const COCKPIT_ANSWER = (ids) => ({ pinned: ids })
+
+    await check('0.6.0: the setting "Where the new note is pinned" - Note Tabs (the default), Cockpit\'s Pinned section, Note Tabs and Cockpit - is public in the Jot section, right after "Pin the new note", and says each needs its plugin', () => {
+        const specs = desktop.settingSpecs
+        const spec = specs.pinTarget
+        assert.deepStrictEqual({ label: spec.label, description: spec.description, value: spec.value, type: spec.type, isEnum: spec.isEnum, options: spec.options, public: spec.public, section: spec.section }, {
+            label: 'Where the new note is pinned',
+            description: 'Note Tabs needs the Note Tabs plugin, Cockpit\'s Pinned section needs the Cockpit plugin, and both need both. The form\'s row names it: Pin in Note Tabs, Pin in Cockpit, or Pin in both.',
+            value: 'noteTabs', type: 2, isEnum: true, options: { noteTabs: 'Note Tabs', cockpit: 'Cockpit\'s Pinned section', both: 'Note Tabs and Cockpit' }, public: true, section: 'jot',
+        })
+        assert.deepStrictEqual(Object.keys(spec.options), ['noteTabs', 'cockpit', 'both'], 'Note Tabs first, 0.3.0\'s only target')
+        const keys = Object.keys(specs)
+        assert.strictEqual(keys.indexOf('pinTarget'), keys.indexOf('noteTabs') + 1, 'under "Pin the new note" on the Settings screen')
+        assert.deepStrictEqual([FormModel.PIN_TARGET_NOTE_TABS, FormModel.PIN_TARGET_COCKPIT, FormModel.PIN_TARGET_BOTH], Object.keys(spec.options), 'the model\'s values are the setting\'s')
+    })
+
+    await check('0.6.0: the Pin row\'s label names the target - Pin in Note Tabs, Pin in Cockpit, Pin in both - with the same Pin / Don\'t pin buttons and tooltips that say where, on desktop and on mobile; a target the setting does not offer is Note Tabs', async () => {
+        const labelOf = (html) => (/<span class="jot-label" id="jotNoteTabsLabel">([^<]*)<\/span>/.exec(html) || [])[1]
+        const groupOf = (html) => (/data-field="noteTabs">([\s\S]*?)<\/div>/.exec(html) || [])[1] || ''
+        const buttonsOf = (html) => (groupOf(html).match(/>([^<]+)<\/button>/g) || []).map(label => label.slice(1, -9))
+        const titlesOf = (html) => (groupOf(html).match(/ title="([^"]*)"/g) || []).map(match => match.slice(8, -1))
+        const expected = {
+            noteTabs: ['Pin in Note Tabs', ['Create the note and pin it as a tab in Note Tabs', 'Create the note and leave Note Tabs as it is']],
+            cockpit: ['Pin in Cockpit', ['Create the note and pin it in Cockpit&#39;s Pinned section', 'Create the note and leave Cockpit&#39;s Pinned section as it is']],
+            both: ['Pin in both', ['Create the note and pin it in Note Tabs and in Cockpit&#39;s Pinned section', 'Create the note and leave Note Tabs and Cockpit as they are']],
+            sideways: ['Pin in Note Tabs', ['Create the note and pin it as a tab in Note Tabs', 'Create the note and leave Note Tabs as it is']],
+        }
+        for (const versionInfo of [DESKTOP, MOBILE]) {
+            for (const [pinTarget, [label, titles]] of Object.entries(expected)) {
+                const { state } = await openFormWith({ versionInfo, settings: { noteTabs: 'pin', pinTarget } })
+                const html = state.dialogHtml[0]
+                const where = `${versionInfo.platform}, ${pinTarget}`
+                assert.strictEqual(labelOf(html), label, `${where}: the label`)
+                assert.deepStrictEqual(buttonsOf(html), ['Pin', 'Don&#39;t pin'], `${where}: the buttons`)
+                assert.deepStrictEqual(titlesOf(html), titles, `${where}: the tooltips`)
+                assert.strictEqual(segValue(html, 'jotNoteTabs'), 'pin', `${where}: starts on the setting`)
+            }
+        }
+        assert.deepStrictEqual(FormModel.PIN_ROW_LABELS, { noteTabs: 'Pin in Note Tabs', cockpit: 'Pin in Cockpit', both: 'Pin in both' })
+    })
+
+    await check('0.6.0: Pin with the target on Cockpit runs cockpit.pinNotes with [[id]] - an ARRAY of the new note\'s id - after POST notes and the tags and before openNote, never tabsPinNote, and resolves pinned: true; the same on mobile and on the selection route', async () => {
+        for (const versionInfo of [DESKTOP, MOBILE]) {
+            const { state, outcome } = await openFormWith({ versionInfo, settings: { noteTabs: 'pin', pinTarget: 'cockpit' }, executeResults: { 'cockpit.pinNotes': COCKPIT_ANSWER },
+                dialogResults: [formResult('ok', { title: 'Pinned in Cockpit', tags: 'work, fresh', open: 'editor' })] })
+            const where = versionInfo.platform
+            assert.deepStrictEqual(outcome, { id: outcome.id, opened: true, pinned: true }, `${where}: the resolve shape unchanged`)
+            assert.deepStrictEqual(allPinsOf(state), [{ name: 'cockpit.pinNotes', args: [[outcome.id]] }], `${where}: one call, the id in an array, no Note Tabs`)
+            assert.ok(Array.isArray(cockpitPinsOf(state)[0].args[0]), `${where}: an array argument`)
+            assert.deepStrictEqual(state.timeline.slice(1), ['POST notes', 'POST tags/tWork/notes', 'POST tags', 'POST tags/tag0002/notes', 'execute cockpit.pinNotes', 'execute openNote'],
+                `${where}: the note, the tags, the pin, then the open`)
+            assert.deepStrictEqual([state.messageBoxes, state.warnings], [[], []], `${where}: nothing said`)
+        }
+        const selection = await openSelectionWith('Pay rent', { settings: { noteTabs: 'pin', pinTarget: 'cockpit' }, dialogResults: [formResult('ok', { title: 'Pay rent', tags: 'work', inThisNote: 'replace' })] })
+        assert.deepStrictEqual(selection.state.timeline, ['execute selectedText', 'POST notes', 'execute insertText', 'POST tags/tWork/notes', 'execute cockpit.pinNotes'],
+            'the selection route: the edit, the tags, then the pin')
+        assert.strictEqual(selection.outcome.pinned, true)
+        const left = await openFormWith({ settings: { noteTabs: 'pin', pinTarget: 'cockpit' }, dialogResults: [formResult('ok', { title: 'Not pinned', noteTabs: 'none' })] })
+        assert.deepStrictEqual([allPinsOf(left.state), left.outcome.pinned], [[], false], 'Don\'t pin calls neither plugin')
+    })
+
+    await check('0.6.0: Pin with the target on both runs tabsPinNote, then cockpit.pinNotes, each with [[id]], after the tags and before openNote, and resolves pinned: true; the trigger route the same, before its answer', async () => {
+        const { state, outcome } = await openFormWith({ settings: { noteTabs: 'pin', pinTarget: 'both' }, executeResults: { 'cockpit.pinNotes': COCKPIT_ANSWER },
+            dialogResults: [formResult('ok', { title: 'Pinned twice', tags: 'work', open: 'editor' })] })
+        assert.deepStrictEqual(outcome, { id: outcome.id, opened: true, pinned: true })
+        assert.deepStrictEqual(allPinsOf(state), [{ name: 'tabsPinNote', args: [[outcome.id]] }, { name: 'cockpit.pinNotes', args: [[outcome.id]] }], 'Note Tabs first, then Cockpit')
+        assert.deepStrictEqual(state.timeline, ['execute selectedText', 'POST notes', 'POST tags/tWork/notes', 'execute tabsPinNote', 'execute cockpit.pinNotes', 'execute openNote'])
+        const { state: fired, answer } = await fireTriggerWith({ settings: { noteTabs: 'pin', pinTarget: 'both' }, dialogResults: [formResult('ok', { title: 'Triggered', tags: 'work', inThisNote: 'link' })] })
+        assert.deepStrictEqual(answer, { action: 'link', link: '[Triggered](:/note0001)' })
+        assert.deepStrictEqual(allPinsOf(fired), [{ name: 'tabsPinNote', args: [['note0001']] }, { name: 'cockpit.pinNotes', args: [['note0001']] }])
+        await tick(40)
+        assert.deepStrictEqual(fired.timeline, ['POST notes', 'execute tabsPinNote', 'execute cockpit.pinNotes', 'POST tags/tWork/notes'], 'both pins before the answer; the tags after it')
+    })
+
+    await check('0.6.0: Cockpit not installed or off ("Command not found", or "without a runtime"): the note is created and pinned: false, a console warning every time, and Cockpit\'s own message once a run', async () => {
+        const state = await runBundle({ ...FORM_BASE, settings: { noteTabs: 'pin', pinTarget: 'cockpit' }, executeThrows: ['cockpit.pinNotes'],
+            dialogResults: [formResult('ok', { title: 'First' }), formResult('ok', { title: 'Second', open: 'editor' })] })
+        const open = state.commands.find(item => item.name === 'jot.open')
+        const first = await withWarnings(state, () => open.execute())
+        const second = await withWarnings(state, () => open.execute())
+        assert.deepStrictEqual([first, second], [{ id: first.id, opened: false, pinned: false }, { id: second.id, opened: true, pinned: false }], 'both created, neither pinned')
+        assert.deepStrictEqual(state.messageBoxes, ['Jot: the note is created, but Cockpit is not installed or is off, so it was not pinned there.'], 'one message across two creates')
+        assert.strictEqual(FormModel.COCKPIT_MISSING_MESSAGE, state.messageBoxes[0], 'the model\'s string')
+        assert.strictEqual(state.warnings.filter(line => line.startsWith(COCKPIT_MISSING_LINE)).length, 2, 'a warning each time')
+        assert.strictEqual(state.timeline.slice(-2).join(' '), 'execute cockpit.pinNotes execute openNote', 'the open still runs')
+        const unloaded = await openFormWith({ settings: { noteTabs: 'pin', pinTarget: 'cockpit' }, executeResults: { 'cockpit.pinNotes': () => { throw new Error('Cannot execute a command without a runtime: cockpit.pinNotes') } },
+            dialogResults: [formResult('ok', { title: 'Third' })] })
+        assert.deepStrictEqual([unloaded.outcome.pinned, unloaded.state.messageBoxes], [false, [FormModel.COCKPIT_MISSING_MESSAGE]], 'declared but not running: the same message')
+        const refused = await openFormWith({ settings: { noteTabs: 'pin', pinTarget: 'cockpit' }, executeResults: { 'cockpit.pinNotes': () => { throw new Error('Something else') } },
+            dialogResults: [formResult('ok', { title: 'Refused', open: 'editor' })] })
+        assert.deepStrictEqual([refused.outcome.pinned, refused.state.messageBoxes], [false, []], 'any other refusal: no message')
+        assert.ok(refused.state.warnings.length === 1 && refused.state.warnings[0].startsWith('Jot: Cockpit could not pin the note'), refused.state.warnings.join(' | '))
+        assert.deepStrictEqual(refused.state.timeline.slice(-2), ['execute cockpit.pinNotes', 'execute openNote'])
+    })
+
+    await check('0.6.0: with both as the target each failure is its own - one plugin missing still pins in the other (pinned: true) and says only that one is missing; both missing say both, each once a run, and resolve pinned: false', async () => {
+        const noTabs = await openFormWith({ settings: { noteTabs: 'pin', pinTarget: 'both' }, executeThrows: ['tabsPinNote'], executeResults: { 'cockpit.pinNotes': COCKPIT_ANSWER },
+            dialogResults: [formResult('ok', { title: 'Cockpit only' })] })
+        assert.deepStrictEqual(noTabs.outcome, { id: noTabs.outcome.id, opened: false, pinned: true }, 'Cockpit pinned it')
+        assert.deepStrictEqual(allPinsOf(noTabs.state).map(call => call.name), ['tabsPinNote', 'cockpit.pinNotes'], 'Cockpit is asked after Note Tabs failed')
+        assert.deepStrictEqual(noTabs.state.messageBoxes, [FormModel.NOTE_TABS_MISSING_MESSAGE])
+        const noCockpit = await openFormWith({ settings: { noteTabs: 'pin', pinTarget: 'both' }, executeThrows: ['cockpit.pinNotes'], dialogResults: [formResult('ok', { title: 'Note Tabs only' })] })
+        assert.deepStrictEqual(noCockpit.outcome, { id: noCockpit.outcome.id, opened: false, pinned: true }, 'Note Tabs pinned it')
+        assert.deepStrictEqual(noCockpit.state.messageBoxes, [FormModel.COCKPIT_MISSING_MESSAGE])
+        const state = await runBundle({ ...FORM_BASE, settings: { noteTabs: 'pin', pinTarget: 'both' }, executeThrows: ['tabsPinNote', 'cockpit.pinNotes'],
+            dialogResults: [formResult('ok', { title: 'First' }), formResult('ok', { title: 'Second' })] })
+        const open = state.commands.find(item => item.name === 'jot.open')
+        const first = await withWarnings(state, () => open.execute())
+        const second = await withWarnings(state, () => open.execute())
+        assert.deepStrictEqual([first.pinned, second.pinned], [false, false])
+        assert.deepStrictEqual(notePosts(state).map(post => post.body.title), ['First', 'Second'], 'both created')
+        assert.deepStrictEqual(state.messageBoxes, [FormModel.NOTE_TABS_MISSING_MESSAGE, FormModel.COCKPIT_MISSING_MESSAGE], 'each plugin\'s message once, across two creates')
+        assert.strictEqual(allPinsOf(state).length, 4, 'both asked on every create: a missing plugin is never remembered')
+    })
+
+    await check('0.6.0: the pin target is ignored while "Pin the new note" is Not used - no row, and neither plugin is called whatever the result carries - and in edit mode', async () => {
+        for (const pinTarget of ['cockpit', 'both']) {
+            const { state, outcome } = await openFormWith({ settings: { pinTarget }, dialogResults: [formResult('ok', { title: 'Plain', noteTabs: 'pin' })] })
+            assert.ok(!state.dialogHtml[0].includes('jotNoteTabsRow') && !state.dialogHtml[0].includes('name="noteTabs"'), `${pinTarget}: no row`)
+            assert.deepStrictEqual([allPinsOf(state), outcome.pinned, state.messageBoxes], [[], false, []], `${pinTarget}: no call, no message`)
+        }
+        const edit = await editWith({ settings: { noteTabs: 'pin', pinTarget: 'cockpit' }, dialogResults: [editResult('ok', { title: 'Call the bank today', noteTabs: 'pin' })] })
+        assert.ok(!edit.state.dialogHtml[0].includes('jotNoteTabsRow'))
+        assert.deepStrictEqual(allPinsOf(edit.state), [])
+    })
+
+    await check('0.6.0: formModel - pinTargetChoice reads anything but cockpit and both as Note Tabs, pinTargets orders the plugins, and planCreate carries the pin target beside its pin', () => {
+        assert.deepStrictEqual(['noteTabs', 'cockpit', 'both', '', undefined, 'Cockpit', 'off'].map(FormModel.pinTargetChoice), ['noteTabs', 'cockpit', 'both', 'noteTabs', 'noteTabs', 'noteTabs', 'noteTabs'])
+        assert.deepStrictEqual(['noteTabs', 'cockpit', 'both', 'x'].map(FormModel.pinTargets), [['noteTabs'], ['cockpit'], ['noteTabs', 'cockpit'], ['noteTabs']])
+        const plan = (pinTarget, fields = {}) => FormModel.planCreate(formResult('ok', { title: 'A', ...fields }), { noteTabsDefault: 'pin', pinTarget })
+        assert.deepStrictEqual([plan('cockpit'), plan('both'), plan(undefined), plan('cockpit', { noteTabs: 'none' })].map(made => [made.pin, made.pinTarget]),
+            [[true, 'cockpit'], [true, 'both'], [true, 'noteTabs'], [false, 'cockpit']])
+        assert.strictEqual(FormModel.PIN_TITLES.noteTabs, FormModel.NOTE_TABS_TITLES, 'Note Tabs keeps 0.3.0\'s tooltips')
     })
 
     // ---------------------------------------------------------------- the sandbox proxy rule

@@ -37,11 +37,13 @@
  * and every notebook change in edit mode is bracketed by holdSelection / keepSelection, which open the note being read again, with its scroll and     *
  * caret, when Joplin moved off it. Not when the note is about to be opened anyway (Create and open).                                               *
  *                                                                                                                                                  *
- * NOTE TABS (issue 7). With the noteTabs setting on Pin or Don't pin, create mode has a Note Tabs row that starts there (never edit mode, as       *
- * Open). Pin runs the Note Tabs plugin's tabsPinNote with the new note's id once the note exists, after the tags (the trigger route writes its     *
- * tags later) and before any open (pinInNoteTabs): Note Tabs adds the note as a pinned tab without opening it or moving the selection. No plugin   *
- * can list the plugins installed, so nothing is asked at the start or before the form shows; a Pin that finds no Note Tabs still creates the note, *
- * and says so once a run. The create result says whether the note was pinned (pinned).                                                             *
+ * PINNING (issue 7; Cockpit from 0.6.0). With the noteTabs setting on Pin or Don't pin, create mode has a Pin row that starts there (never edit    *
+ * mode, as Open), labelled by the pinTarget setting: Pin in Note Tabs, Pin in Cockpit or Pin in both. Pin runs, once the note exists, after the    *
+ * tags (the trigger route writes its tags later) and before any open (pinNewNote), the Note Tabs plugin's tabsPinNote, Cockpit's cockpit.pinNotes, *
+ * or both in that order, each with the new note's id in an array: Note Tabs adds the note as a pinned tab and Cockpit adds it to its Pinned        *
+ * section, neither opening it or moving the selection. No plugin can list the plugins installed, so nothing is asked at the start or before the    *
+ * form shows; a Pin that finds a plugin missing still creates the note, and says so once a run for that plugin. The create result says whether any *
+ * target pinned the note (pinned).                                                                                                                 *
  *                                                                                                                                                  *
  * Every decision is formModel.js's (planCreate and the rules under it), so this file is the I/O around it: the notebooks and tags read from the     *
  * data API, the dialog, the POST notes, the tags (reused as Joplin matches titles, created when missing, attached; never fatal), and the open.     *
@@ -124,8 +126,8 @@ export interface FormPresets {
     editorNote?: any
 }
 
-// What the commands resolve in create mode (brief section 6). pinned: Note Tabs pinned the new note (issue 7); false when no pin was asked or it
-// failed.
+// What the commands resolve in create mode (brief section 6). pinned: Note Tabs or Cockpit pinned the new note (issue 7; Cockpit from 0.6.0) -
+// with both as the target, either one; false when no pin was asked or every one asked failed.
 export interface FormOutcome {
     id: string
     opened: boolean
@@ -156,7 +158,7 @@ interface Created {
     opened: boolean
     // Where the note opens ("editor" or "window"), "" when it does not.
     openTarget: string
-    // Whether Note Tabs pinned the note (pinInNoteTabs).
+    // Whether a target pinned the note (pinNewNote).
     pinned: boolean
     inThisNote: string | null
     link: string
@@ -255,8 +257,8 @@ export async function openJot(route: string): Promise<FormOutcome | null> {
  * Opens the form and applies what the user chose. `route` names the way in ("menu" for Tools > Jot… and its shortcut, "contextMenu" for the        *
  * editor's right-click menu, "button" for the toolbar, "caller" for another plugin's { mode: 'new' }, all four the same plain form; "selection"    *
  * for highlighted text, which adds the In this note row). `presets` fill the fields: type, title, body, notebookId (passed over when it is not a   *
- * notebook), due (the Due row, dueFields). Resolves { id, opened, pinned } when a note was created (pinned: true only when Note Tabs pinned it),   *
- * null when nothing was (Cancel, Escape, an empty Create, no notebook to create in, or a form already open).                                       *
+ * notebook), due (the Due row, dueFields). Resolves { id, opened, pinned } when a note was created (pinned: true only when Note Tabs or Cockpit    *
+ * pinned it), null when nothing was (Cancel, Escape, an empty Create, no notebook to create in, or a form already open).                           *
  ***************************************************************************************************************************************************/
 export async function openForm(route: string, presets: FormPresets = {}): Promise<FormOutcome | null> {
     const created = await withFormOpen(() => runForm(route, presets || {}))
@@ -373,8 +375,10 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
     timing.lap("lists")
     const backlinkSettings = settings.backlink
     const openDefault = settings.openAfterCreate
-    // The Note Tabs row (issue 7): drawn, and starting there, when the setting is Pin or Don't pin; "" when it is Not used - no row, no pin.
+    // The Pin row (issue 7): drawn, and starting there, when the setting is Pin or Don't pin; "" when it is Not used - no row, no pin.
     const noteTabsDefault: string = FormModel.noteTabsChoices().indexOf(settings.noteTabs) >= 0 ? settings.noteTabs : ""
+    // Where its Pin pins (0.6.0): the row's label, and the plugins createNote calls.
+    const pinTarget: string = FormModel.pinTargetChoice(settings.pinTarget)
     // What the form makes of the lists: the notebooks by path, the tag titles, the notebook it starts on and the back link (which names the note's
     // notebook). Made again from fresh lists when the notebook picked turns out to be gone (below).
     const fromLists = async (lists: FormLists) => {
@@ -421,11 +425,12 @@ async function runForm(route: string, presets: FormPresets): Promise<Created | n
             const result = await showDialog(handle, buildFormHtml({
                 notebooks: shown.notebooks, tags: shown.tagTitles, values, dayStart, mobile, mobileWidth, pickerOpen, inThisNoteChoices,
                 inThisNoteLabels: row.labels, inThisNoteTitles: row.titles, inThisNoteDefault: row.fallback, backlinkText: shown.backlinkLine, noteTabsDefault,
+                pinTarget,
                 timing: SHOW_OPEN_TIMINGS ? { start: timing.start, parts: timing.parts, htmlAt: Date.now(), screen: screenWidthSeen() } : null,
             }))
             const plan = FormModel.planCreate(result, {
                 defaultType: resolvedType, dayStart, notebookId: shown.notebookId, inThisNoteChoices, inThisNoteDefault: row.fallback, mobile,
-                openDefault: open, noteTabsDefault, backlink: shown.backlink,
+                openDefault: open, noteTabsDefault, pinTarget, backlink: shown.backlink,
             })
             if (plan.kind === "none" || plan.kind === "nothing") return null
             if (plan.kind === "invalidDue"){
@@ -739,13 +744,13 @@ async function selectedFolder(): Promise<any> {
 }
 
 /** createNote **************************************************************************************************************************************
- * Executes a 'create' plan: POST notes with the payload formModel built, then the In this note choice, then the tags, then the pin in Note Tabs    *
- * when the Note Tabs row says Pin, and last the open when the plan asks for one. The selection route makes its edit first (the link to the new     *
- * note under its final title), while the editor surely holds the note the form was opened from: the tags can make Joplin select another note (the  *
- * selection guard gives it back, but an edit made in between would land in the wrong note), and opening switches the editor for good. The pin      *
- * moves nothing (pinInNoteTabs) and comes before the open, so the note opened is already a pinned tab. The trigger route makes no edit here: its   *
- * edit is the content script's, made from the answer, so its tags (laterTags) and, on Create and open, the open wait for the content script too    *
- * (writeTriggerTags, openLater); its pin is made here all the same.                                                                                *
+ * Executes a 'create' plan: POST notes with the payload formModel built, then the In this note choice, then the tags, then the pin (Note Tabs,     *
+ * Cockpit or both, by the pin target) when the Pin row says Pin, and last the open when the plan asks for one. The selection route makes its edit  *
+ * first (the link to the new note under its final title), while the editor surely holds the note the form was opened from: the tags can make       *
+ * Joplin select another note (the selection guard gives it back, but an edit made in between would land in the wrong note), and opening switches   *
+ * the editor for good. The pin moves nothing (pinNewNote) and comes before the open, so the note opened is already pinned. The trigger route makes *
+ * no edit here: its edit is the content script's, made from the answer, so its tags (laterTags) and, on Create and open, the open wait for the     *
+ * content script too (writeTriggerTags, openLater); its pin is made here all the same.                                                             *
  ***************************************************************************************************************************************************/
 async function createNote(plan: any, row: InThisNote): Promise<Created> {
     const note = await joplin.data.post(["notes"], null, plan.note)
@@ -757,9 +762,23 @@ async function createNote(plan: any, row: InThisNote): Promise<Created> {
     const openLater = !!openTarget && row.trigger !== null
     const laterTags: string[] = row.trigger !== null ? plan.tags : []
     if (plan.tags.length && row.trigger === null) await writeTags(note.id, plan.tags, !openTarget)
-    const pinned = plan.pin ? await pinInNoteTabs(note.id) : false
+    const pinned = plan.pin ? await pinNewNote(note.id, plan.pinTarget) : false
     if (openTarget && !openLater) await openCreatedNote(note.id, openTarget)
     return { id: note.id, opened: !!openTarget, openTarget, pinned, inThisNote: plan.inThisNote || null, link, openLater, laterTags }
+}
+
+/** pinNewNote **************************************************************************************************************************************
+ * The Pin row's Pin, by the pin target (0.6.0, formModel.pinTargets): Note Tabs (pinInNoteTabs), Cockpit's Pinned section (pinInCockpit), or       *
+ * both, Note Tabs first and then Cockpit whatever Note Tabs answered: each failure is its own, and each absent plugin is said once a run on its    *
+ * own. Resolves whether any target pinned the note. Never throws.                                                                                  *
+ ***************************************************************************************************************************************************/
+async function pinNewNote(noteId: string, target: string): Promise<boolean> {
+    let pinned = false
+    for (const plugin of FormModel.pinTargets(target)){
+        const done = plugin === FormModel.PIN_TARGET_COCKPIT ? await pinInCockpit(noteId) : await pinInNoteTabs(noteId)
+        pinned = pinned || done
+    }
+    return pinned
 }
 
 /** pinInNoteTabs ***********************************************************************************************************************************
@@ -791,6 +810,38 @@ async function pinInNoteTabs(noteId: string): Promise<boolean> {
             await joplin.views.dialogs.showMessageBox(FormModel.NOTE_TABS_MISSING_MESSAGE)
         } catch (boxError) {
             console.warn("Jot: could not say that Note Tabs is missing", boxError)
+        }
+        return false
+    }
+}
+
+/** pinInCockpit ************************************************************************************************************************************
+ * The Pin row's Pin with Cockpit as the target (0.6.0): Cockpit's cockpit.pinNotes (io.github.pmslava.cockpit, from 2.11.1, the third command of   *
+ * its contract for other plugins) with the new note's id in an ARRAY, as tabsPinNote takes it, once the note exists. Cockpit appends it to its     *
+ * Pinned section (an id already there stays where it is) and redraws its panel; it writes no note and moves no selection, so no guard is needed.   *
+ * It resolves { pinned: [ids] }, which Jot does not need. Resolves whether the note was pinned. NEVER THROWS, in pinInNoteTabs' shape: Joplin's    *
+ * "Command not found" or "without a runtime" means Cockpit is not installed, or is off (or older than 2.11.1), said once a run of the plugin       *
+ * (cockpitMissingShown) with a console warning every time; any other refusal is a console warning and no message.                                  *
+ ***************************************************************************************************************************************************/
+// Whether COCKPIT_MISSING_MESSAGE has been shown in this run of the plugin.
+var cockpitMissingShown = false
+
+async function pinInCockpit(noteId: string): Promise<boolean> {
+    try {
+        await joplin.commands.execute("cockpit.pinNotes", [noteId])
+        return true
+    } catch (error) {
+        if (!/Command not found|without a runtime/.test(String((error && (error as any).message) || error))){
+            console.warn("Jot: Cockpit could not pin the note", error)
+            return false
+        }
+        console.warn("Jot: Cockpit is not installed or is off, so the new note is not pinned there", error)
+        if (cockpitMissingShown) return false
+        cockpitMissingShown = true
+        try {
+            await joplin.views.dialogs.showMessageBox(FormModel.COCKPIT_MISSING_MESSAGE)
+        } catch (boxError) {
+            console.warn("Jot: could not say that Cockpit is missing", boxError)
         }
         return false
     }

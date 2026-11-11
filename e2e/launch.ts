@@ -37,6 +37,14 @@ const PLUGIN_DIST = path.join(REPO_ROOT, 'dist');
 export const NOTE_TABS_E2E_VERSION = process.env.NOTE_TABS_E2E_VERSION ?? '1.4.0';
 export const NOTE_TABS_JPL = path.join(CACHE_DIR, `joplin.plugin.note.tabs-${NOTE_TABS_E2E_VERSION}.jpl`);
 
+/**
+ * Cockpit's released .jpl (io.github.pmslava.cockpit), which `scripts/setup-e2e.sh` downloads beside Note Tabs'. Jot's Pin row with the target
+ * on Cockpit (0.6.0) runs Cockpit's `cockpit.pinNotes`, first in Cockpit 2.11.1, so the spec that proves it installs the real plugin next to Jot.
+ * Pass it in `launchJoplin({ extraPlugins })`. The version is in the file name for the same reason as Note Tabs'.
+ */
+export const COCKPIT_E2E_VERSION = process.env.COCKPIT_E2E_VERSION ?? '2.11.1';
+export const COCKPIT_JPL = path.join(CACHE_DIR, `io.github.pmslava.cockpit-${COCKPIT_E2E_VERSION}.jpl`);
+
 // The plugin id Jot ships under (see src/manifest.json). Joplin embeds it in the plugin's background
 // webview URL (?pluginId=...) and in the iframe ids of its dialogs and panels, so the harness keys on it.
 export const PLUGIN_ID = 'io.github.pmslava.jot';
